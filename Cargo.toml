@@ -1,6 +1,6 @@
 [package]
 name = "turboquant"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Sascha <sascha@privora.com>"]
 description = "TurboQuant KV-Cache Quantization — 3-bit compression with zero accuracy loss (Zandieh et al., ICLR 2026)"
