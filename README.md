@@ -2,7 +2,7 @@
 
 Rust implementation of Google's TurboQuant algorithm (Zandieh et al., ICLR 2026) for extreme KV-cache compression in LLM inference.
 
-[![CI](https://github.com/nicosql/turboquant/actions/workflows/ci.yml/badge.svg)](https://github.com/nicosql/turboquant/actions/workflows/ci.yml)
+[![CI](https://github.com/SaschaOnTour/turboquant/actions/workflows/ci.yml/badge.svg)](https://github.com/SaschaOnTour/turboquant/actions/workflows/ci.yml)
 [![docs.rs](https://docs.rs/turboquant/badge.svg)](https://docs.rs/turboquant)
 [![crates.io](https://img.shields.io/crates/v/turboquant.svg)](https://crates.io/crates/turboquant)
 
@@ -82,15 +82,22 @@ mistralrs run --pa-cache-type tq3 -m Qwen/Qwen3-0.6B
 mistralrs run --pa-cache-type tq4 -m mistralai/Mistral-7B-Instruct-v0.3
 ```
 
-### Integration Benchmarks (CPU-only, Qwen3-0.6B, 512 prompt + 128 decode)
+### Integration Benchmarks (CPU-only, Qwen3-0.6B, 128 decode tokens)
 
-| | Normal | TQ3 | Overhead |
-|---|---|---|---|
-| Prefill | 129.7 tok/s | 130.0 tok/s | **0% overhead** |
-| Decode | 10.5 tok/s | 8.4 tok/s | **~20% (amortized, includes one-time flush)** |
-| KV-Cache Memory | 1x | **~4.9x compression** | |
+| Context | Variant | Total Time | Prefill tok/s | Decode tok/s | Wall-Clock Overhead |
+|---------|---------|-----------|---------------|-------------|---------------------|
+| 512 | Normal | 58.4s | 148.1 | 11.8 | — |
+| 512 | TQ3 | 64.7s | 141.5 | 9.5 | +11% |
+| 2048 | Normal | 2:38 | 58.4 | 11.5 | — |
+| 2048 | TQ3 | 2:55 | 59.5 | 7.7 | +10% |
+| 4096 | Normal | 7:50 | 32.2 | 10.9 | — |
+| 4096 | TQ3 | 8:16 | 31.6 | 6.5 | +6% |
+| 16384 | Normal | 1:47:42 | 7.7 | 8.0 | — |
+| 16384 | TQ3 | 1:49:00 | 7.6 | 2.9 | +1.2% |
 
-The decode overhead is amortized over 128 tokens and includes a one-time lazy quantization flush. A future GPU kernel implementation (Approach B) would eliminate this overhead entirely. See [Approach B Roadmap](../docs/approach-b-roadmap.md).
+**Key takeaway**: TQ3 overhead **decreases with context length** (11% → 10% → 6% → 1.2%) because prefill dominates at longer contexts and runs at the same speed. The decode throughput difference (dequantization cost) matters less as sequences grow — exactly the regime where KV-cache compression is needed most.
+
+A future GPU kernel implementation (Approach B) would reduce the decode overhead further. See [Approach B Roadmap](../docs/approach-b-roadmap.md).
 
 ### Optimizations
 
@@ -141,7 +148,7 @@ The 3-bit packing layout is **identical** to llama.cpp tq3_0 (8 indices into 3 b
 
 ```toml
 [dependencies]
-turboquant = { git = "https://github.com/nicosql/turboquant.git" }
+turboquant = { git = "https://github.com/SaschaOnTour/turboquant.git" }
 ```
 
 ## Building with Native CPU Optimizations
