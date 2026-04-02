@@ -1,1 +1,8 @@
 /target
+*.swp
+*.swo
+.idea/
+.vscode/
+.claude/
+coverage.lcov
+CLAUDE.md

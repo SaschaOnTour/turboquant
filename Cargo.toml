@@ -5,8 +5,10 @@ edition = "2021"
 authors = ["Sascha <sascha@privora.com>"]
 description = "TurboQuant KV-Cache Quantization — 3-bit compression with zero accuracy loss (Zandieh et al., ICLR 2026)"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nicosql/turboquant"
+repository = "https://github.com/SaschaOnTour/turboquant"
+homepage = "https://github.com/SaschaOnTour/turboquant"
 documentation = "https://docs.rs/turboquant"
+exclude = ["docs/*", ".github/*", ".claude/*"]
 readme = "README.md"
 keywords = ["quantization", "llm", "kv-cache", "inference", "compression"]
 categories = ["science", "algorithms", "compression"]
@@ -14,14 +16,28 @@ rust-version = "1.75"
 
 [dependencies]
 half = "2"
-rand = "0.8"
-rand_chacha = "0.3"
 thiserror = "2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 approx = "0.5"
 
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
 [[bench]]
 name = "quantize_bench"
 harness = false
+
+[[example]]
+name = "basic_quantize"
+
+[[example]]
+name = "kv_cache_demo"
