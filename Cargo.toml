@@ -1,5 +1,5 @@
 [package]
-name = "turboquant"
+name = "turboquant-rs"
 version = "0.2.0"
 edition = "2021"
 authors = ["Sascha <sascha@privora.com>"]
