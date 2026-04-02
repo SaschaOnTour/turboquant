@@ -24,7 +24,7 @@ jobs:
           CURRENT=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
           # Compare against crates.io instead of git history
-          PUBLISHED=$(curl -s "https://crates.io/api/v1/crates/$CRATE_NAME" | jq -r '.crate.max_version // "0.0.0"')
+          PUBLISHED=$(curl -s -H "User-Agent: turboquant-ci (github.com/SaschaOnTour/turboquant)" "https://crates.io/api/v1/crates/$CRATE_NAME" | jq -r '.crate.max_version // "0.0.0"')
           if [ "$PUBLISHED" = "null" ] || [ "$PUBLISHED" = "0.0.0" ] || [ "$CURRENT" != "$PUBLISHED" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Local $CURRENT vs crates.io $PUBLISHED — publishing"
