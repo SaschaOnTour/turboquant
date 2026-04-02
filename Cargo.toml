@@ -7,12 +7,15 @@ description = "TurboQuant KV-Cache Quantization — 3-bit compression with zero 
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/SaschaOnTour/turboquant"
 homepage = "https://github.com/SaschaOnTour/turboquant"
-documentation = "https://docs.rs/turboquant"
+documentation = "https://docs.rs/turboquant-rs"
 exclude = ["docs/*", ".github/*", ".claude/*"]
 readme = "README.md"
 keywords = ["quantization", "llm", "kv-cache", "inference", "compression"]
 categories = ["science", "algorithms", "compression"]
 rust-version = "1.75"
+
+[lib]
+name = "turboquant"
 
 [dependencies]
 half = "2"
