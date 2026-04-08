@@ -17,7 +17,7 @@ use turboquant::qjl::{
     dot_product, estimate_inner_product_single, qjl_scaling_constant, quantize_with_qjl, sign_bit,
 };
 use turboquant::quantize::{dequantize_vec, quantize_vec};
-use turboquant::rotation::{generate_sign_pattern, wht_inplace};
+use turboquant::rotation::wht_inplace;
 
 // ---------------------------------------------------------------------------
 // Constants from the paper
@@ -101,7 +101,7 @@ fn random_unit_vec(dim: usize, seed: u64) -> Vec<f32> {
     let mut gaussians = Vec::with_capacity(dim);
 
     // Box-Muller: generate pairs of N(0,1) variates
-    let pairs = (dim + 1) / 2;
+    let pairs = dim.div_ceil(2);
     for _ in 0..pairs {
         let u1 = rng.next_open01();
         let u2 = rng.next_open01();
@@ -538,7 +538,7 @@ fn residual_norm_equals_quantization_error() {
     let polar_bits = total_bits - 1;
 
     for i in 0..20 {
-        let x = random_unit_vec(DIM, i as u64 * 71 + 100);
+        let x = random_unit_vec(DIM, i * 71 + 100);
         let config = TurboQuantConfig::new(total_bits, DIM)
             .unwrap()
             .with_seed(ROTATION_SEED);

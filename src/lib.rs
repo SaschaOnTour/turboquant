@@ -12,6 +12,9 @@ pub mod qjl;
 pub mod quantize;
 pub mod rotation;
 
+#[cfg(feature = "candle")]
+pub mod cache;
+
 #[cfg(test)]
 mod test_utils;
 

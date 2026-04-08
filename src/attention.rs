@@ -173,19 +173,15 @@ pub struct PackedImport<'a> {
 ///
 /// Pure Operation: accessor calls and collection only.
 fn collect_packed_data(blocks: &[QjlBlock]) -> (Vec<u8>, Vec<u16>) {
-    if blocks.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
-    let bytes_per_block = blocks[0].polar_block().packed_indices().len();
-    let mut packed_bytes = Vec::with_capacity(blocks.len() * bytes_per_block);
-    let mut scales = Vec::with_capacity(blocks.len());
-
-    for block in blocks {
-        let polar = block.polar_block();
-        packed_bytes.extend_from_slice(polar.packed_indices());
-        scales.push(polar.scale().to_bits());
-    }
-
+    let packed_bytes: Vec<u8> = blocks
+        .iter()
+        .flat_map(|b| b.polar_block().packed_indices())
+        .copied()
+        .collect();
+    let scales: Vec<u16> = blocks
+        .iter()
+        .map(|b| b.polar_block().scale().to_bits())
+        .collect();
     (packed_bytes, scales)
 }
 
@@ -1590,7 +1586,8 @@ mod tests {
         // Export, then reconstruct via import
         let (packed, scales) = cache.export_packed_range(TEST_LAYER, 0, 1, true).unwrap();
         let bytes_per_block = packed.len();
-        let signs_per_block = (TEST_DIM + 7) / 8;
+        const BITS_PER_BYTE: usize = 8;
+        let signs_per_block = TEST_DIM.div_ceil(BITS_PER_BYTE);
         // Need QJL signs too — create dummy ones for the test
         let qjl_signs = vec![0u8; signs_per_block];
         let residual_norms = vec![0u16; 1];

@@ -1502,7 +1502,8 @@ mod tests {
         // packed_indices should be non-empty
         assert!(!block.polar_block().packed_indices().is_empty());
         // qjl_signs should have ceil(dim/8) bytes
-        let expected_sign_bytes = (TEST_DIM + 7) / 8;
+        const BITS_PER_BYTE: usize = 8;
+        let expected_sign_bytes = TEST_DIM.div_ceil(BITS_PER_BYTE);
         assert_eq!(block.qjl_signs().len(), expected_sign_bytes);
     }
 }
