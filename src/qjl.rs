@@ -117,6 +117,46 @@ pub struct QjlBlock {
     pub(crate) residual_norm: f16,
 }
 
+impl QjlBlock {
+    /// Returns a reference to the inner PolarQuant packed block.
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by GPU kernel integration for bulk data export
+    pub fn polar_block(&self) -> &PackedBlock {
+        &self.polar_block
+    }
+
+    /// Returns a reference to the packed QJL sign bits.
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by GPU kernel integration for bulk data export
+    pub fn qjl_signs(&self) -> &[u8] {
+        &self.qjl_signs
+    }
+
+    /// Returns the residual L2-norm stored as f16.
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by GPU kernel integration for bulk data export
+    pub fn residual_norm(&self) -> f16 {
+        self.residual_norm
+    }
+
+    /// Creates a `QjlBlock` from pre-computed components without re-quantizing.
+    ///
+    /// Use this to reconstruct blocks from GPU-quantized data.
+    ///
+    /// Pure Operation: field assignment only.
+    // qual:api — used by GPU kernel integration for importing quantized data
+    pub fn from_parts(polar_block: PackedBlock, qjl_signs: Vec<u8>, residual_norm: f16) -> Self {
+        Self {
+            polar_block,
+            qjl_signs,
+            residual_norm,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pure Operation helpers
 // ---------------------------------------------------------------------------
@@ -282,7 +322,7 @@ const QJL_SIGN_BITS: u8 = 1;
 /// the results as a bit vector (8 signs per byte).
 ///
 /// Integration: calls `rademacher_vector_product` and `pack_sign_bits`.
-fn compute_qjl_signs(residual: &[f32], dim: usize, seed: u64) -> Vec<u8> {
+pub fn compute_qjl_signs(residual: &[f32], dim: usize, seed: u64) -> Vec<u8> {
     let sign_bools: Vec<bool> = (0..dim)
         .map(|j| {
             let projection = rademacher_vector_product(residual, dim, seed, j);
@@ -1409,5 +1449,60 @@ mod tests {
             (expected - actual).abs() < FLOAT_EPSILON,
             "qjl_correction mismatch: expected {expected}, got {actual}"
         );
+    }
+
+    // -- QjlBlock accessors and from_parts -----------------------------------
+
+    #[test]
+    fn from_parts_roundtrip() {
+        let config = TurboQuantConfig::new(BITS_3, TEST_DIM)
+            .unwrap()
+            .with_seed(TEST_ROTATION_SEED);
+        let data = pseudo_random_vec(TEST_DIM, TEST_QJL_SEED);
+        let original = quantize_with_qjl(&config, &data, TEST_QJL_SEED).unwrap();
+
+        let reconstructed = QjlBlock::from_parts(
+            PackedBlock::from_raw(
+                original.polar_block().bits(),
+                original.polar_block().scale(),
+                original.polar_block().packed_indices().to_vec(),
+            ),
+            original.qjl_signs().to_vec(),
+            original.residual_norm(),
+        );
+
+        assert_eq!(
+            reconstructed.polar_block().bits(),
+            original.polar_block().bits()
+        );
+        assert_eq!(
+            reconstructed.polar_block().scale(),
+            original.polar_block().scale()
+        );
+        assert_eq!(
+            reconstructed.polar_block().packed_indices(),
+            original.polar_block().packed_indices()
+        );
+        assert_eq!(reconstructed.qjl_signs(), original.qjl_signs());
+        assert_eq!(reconstructed.residual_norm(), original.residual_norm());
+    }
+
+    #[test]
+    fn accessor_polar_block_matches_quantized() {
+        let config = TurboQuantConfig::new(BITS_3, TEST_DIM)
+            .unwrap()
+            .with_seed(TEST_ROTATION_SEED);
+        let data = pseudo_random_vec(TEST_DIM, TEST_QJL_SEED);
+        let block = quantize_with_qjl(&config, &data, TEST_QJL_SEED).unwrap();
+
+        // polar_block bits should be total_bits - 1
+        assert_eq!(block.polar_block().bits(), BITS_3 - 1);
+        // scale should be positive (L2 norm of non-zero vector)
+        assert!(block.polar_block().scale().to_f32() > 0.0);
+        // packed_indices should be non-empty
+        assert!(!block.polar_block().packed_indices().is_empty());
+        // qjl_signs should have ceil(dim/8) bytes
+        let expected_sign_bytes = (TEST_DIM + 7) / 8;
+        assert_eq!(block.qjl_signs().len(), expected_sign_bytes);
     }
 }

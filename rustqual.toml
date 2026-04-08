@@ -45,6 +45,14 @@ external_prefixes = [
     "mix_seed",
     "ceiling_div",
     "is_zero_norm",
+    "polar_block",
+    "packed_indices",
+    "qjl_signs",
+    "residual_norm",
+    "from_raw",
+    "from_parts",
+    "PackedBlock::from_raw",
+    "QjlBlock::from_parts",
 ]
 
 # Function names (or glob patterns) to exclude from analysis.

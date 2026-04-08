@@ -122,6 +122,30 @@ impl TurboQuantConfig {
         self.rotation_seed = seed;
         self
     }
+
+    /// Returns the bit width (2, 3, or 4).
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by GPU kernel integration
+    pub fn bits(&self) -> u8 {
+        self.bits
+    }
+
+    /// Returns the vector dimension.
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by GPU kernel integration
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Returns the rotation seed.
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by GPU kernel integration
+    pub fn rotation_seed(&self) -> u64 {
+        self.rotation_seed
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +205,29 @@ impl PackedBlock {
     /// Total size of the block in bytes (2 bytes for f16 scale + packed data).
     pub fn size_bytes(&self) -> usize {
         SCALE_SIZE_BYTES + self.packed_indices.len()
+    }
+
+    /// Returns a reference to the raw packed index bytes.
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by GPU kernel integration for bulk data export
+    pub fn packed_indices(&self) -> &[u8] {
+        &self.packed_indices
+    }
+
+    /// Creates a `PackedBlock` from pre-packed data without re-packing.
+    ///
+    /// Use this to reconstruct blocks from GPU-quantized data that is already
+    /// in the correct packed layout.
+    ///
+    /// Pure Operation: field assignment only.
+    // qual:api — used by GPU kernel integration for importing quantized data
+    pub fn from_raw(bits: u8, scale: f16, packed_indices: Vec<u8>) -> Self {
+        Self {
+            bits,
+            scale,
+            packed_indices,
+        }
     }
 
     /// Unpacks stored indices into a caller-provided buffer, avoiding allocation.
@@ -920,5 +967,57 @@ mod tests {
         let block = PackedBlock::new(BITS_TQ2, f16::from_f32(1.0), &indices);
         // 32 indices / 4 per byte = 8 bytes packed + 2 bytes scale = 10
         assert_eq!(block.size_bytes(), 10);
+    }
+
+    // -- packed_indices accessor ---------------------------------------------
+
+    #[test]
+    fn packed_indices_returns_raw_bytes() {
+        let indices = vec![1u8, 2, 3, 0, 1, 2, 3, 0];
+        let block = PackedBlock::new(BITS_TQ2, f16::from_f32(1.5), &indices);
+        let raw = block.packed_indices();
+        // 8 indices at 2-bit = 2 bytes
+        assert_eq!(raw.len(), 2);
+        // Unpack roundtrip: packing then accessing raw should match re-packing
+        let block2 = PackedBlock::new(BITS_TQ2, f16::from_f32(1.5), &indices);
+        assert_eq!(raw, block2.packed_indices());
+    }
+
+    #[test]
+    fn packed_indices_3bit_length() {
+        let indices = vec![0u8; TEST_DIM_128];
+        let block = PackedBlock::new(BITS_TQ3, f16::from_f32(1.0), &indices);
+        // 128 indices at 3-bit: 128/8 = 16 groups × 3 bytes = 48 bytes
+        assert_eq!(block.packed_indices().len(), 48);
+    }
+
+    // -- from_raw constructor ------------------------------------------------
+
+    #[test]
+    fn from_raw_roundtrip() {
+        let indices = vec![3u8, 1, 0, 2, 3, 1, 0, 2];
+        let original = PackedBlock::new(BITS_TQ2, f16::from_f32(2.0), &indices);
+        let reconstructed = PackedBlock::from_raw(
+            original.bits(),
+            original.scale(),
+            original.packed_indices().to_vec(),
+        );
+        assert_eq!(reconstructed.bits(), original.bits());
+        assert_eq!(reconstructed.scale(), original.scale());
+        assert_eq!(reconstructed.packed_indices(), original.packed_indices());
+        // Unpack should recover original indices
+        assert_eq!(reconstructed.unpack(indices.len()), indices);
+    }
+
+    #[test]
+    fn from_raw_3bit_roundtrip() {
+        let indices: Vec<u8> = (0..TEST_DIM_128).map(|i| (i % 8) as u8).collect();
+        let original = PackedBlock::new(BITS_TQ3, f16::from_f32(0.5), &indices);
+        let reconstructed = PackedBlock::from_raw(
+            BITS_TQ3,
+            original.scale(),
+            original.packed_indices().to_vec(),
+        );
+        assert_eq!(reconstructed.unpack(TEST_DIM_128), indices);
     }
 }

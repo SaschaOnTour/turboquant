@@ -71,6 +71,10 @@ impl StaticCodebook {
 
 // --- 2-bit codebooks (4 centroids, 3 boundaries) ---
 
+static CODEBOOK_2BIT_D32: StaticCodebook = StaticCodebook {
+    centroids: &CENTROIDS_2B_D32,
+    boundaries: &BOUNDARIES_2B_D32,
+};
 static CODEBOOK_2BIT_D64: StaticCodebook = StaticCodebook {
     centroids: &CENTROIDS_2B_D64,
     boundaries: &BOUNDARIES_2B_D64,
@@ -86,6 +90,10 @@ static CODEBOOK_2BIT_D256: StaticCodebook = StaticCodebook {
 
 // --- 3-bit codebooks (8 centroids, 7 boundaries) ---
 
+static CODEBOOK_3BIT_D32: StaticCodebook = StaticCodebook {
+    centroids: &CENTROIDS_3B_D32,
+    boundaries: &BOUNDARIES_3B_D32,
+};
 static CODEBOOK_3BIT_D64: StaticCodebook = StaticCodebook {
     centroids: &CENTROIDS_3B_D64,
     boundaries: &BOUNDARIES_3B_D64,
@@ -101,6 +109,10 @@ static CODEBOOK_3BIT_D256: StaticCodebook = StaticCodebook {
 
 // --- 4-bit codebooks (16 centroids, 15 boundaries) ---
 
+static CODEBOOK_4BIT_D32: StaticCodebook = StaticCodebook {
+    centroids: &CENTROIDS_4B_D32,
+    boundaries: &BOUNDARIES_4B_D32,
+};
 static CODEBOOK_4BIT_D64: StaticCodebook = StaticCodebook {
     centroids: &CENTROIDS_4B_D64,
     boundaries: &BOUNDARIES_4B_D64,
@@ -202,12 +214,15 @@ pub fn nearest_centroid(value: f64, codebook: &Codebook) -> u8 {
 /// Pure Operation: only match logic, returns a reference.
 fn lookup_static_codebook_ref(bits: u8, dim: usize) -> Option<&'static StaticCodebook> {
     match (bits, dim) {
+        (2, 32) => Some(&CODEBOOK_2BIT_D32),
         (2, 64) => Some(&CODEBOOK_2BIT_D64),
         (2, 128) => Some(&CODEBOOK_2BIT_D128),
         (2, 256) => Some(&CODEBOOK_2BIT_D256),
+        (3, 32) => Some(&CODEBOOK_3BIT_D32),
         (3, 64) => Some(&CODEBOOK_3BIT_D64),
         (3, 128) => Some(&CODEBOOK_3BIT_D128),
         (3, 256) => Some(&CODEBOOK_3BIT_D256),
+        (4, 32) => Some(&CODEBOOK_4BIT_D32),
         (4, 64) => Some(&CODEBOOK_4BIT_D64),
         (4, 128) => Some(&CODEBOOK_4BIT_D128),
         (4, 256) => Some(&CODEBOOK_4BIT_D256),
@@ -249,6 +264,73 @@ pub fn get_codebook(bits: u8, dim: usize) -> Result<Codebook> {
 // ---------------------------------------------------------------------------
 // Pre-computed tables
 // ---------------------------------------------------------------------------
+
+// 2-bit, d=32
+const CENTROIDS_2B_D32: [f64; 4] = [
+    -0.2633194690486469,
+    -0.07980195923950476,
+    0.07980195923950384,
+    0.2633194690486451,
+];
+const BOUNDARIES_2B_D32: [f64; 3] = [-0.1715607141440758, 0.0, 0.17156071414407448];
+
+// 3-bit, d=32
+const CENTROIDS_3B_D32: [f64; 8] = [
+    -0.3662684197149945,
+    -0.2324607608635176,
+    -0.13175624361004853,
+    -0.042851570066700616,
+    0.04285157006670112,
+    0.1317562436100487,
+    0.23246076086351877,
+    0.36626841971499513,
+];
+const BOUNDARIES_3B_D32: [f64; 7] = [
+    -0.29936459028925605,
+    -0.18210850223678307,
+    -0.08730390683837458,
+    0.0,
+    0.08730390683837491,
+    0.18210850223678374,
+    0.29936459028925694,
+];
+
+// 4-bit, d=32
+const CENTROIDS_4B_D32: [f64; 16] = [
+    -0.45356484406403885,
+    -0.3500919292405678,
+    -0.276742371576412,
+    -0.2163621312970215,
+    -0.16307095286109716,
+    -0.11401417528619187,
+    -0.06749924527967034,
+    -0.02235501645565892,
+    0.022355016455658717,
+    0.06749924527967022,
+    0.11401417528619151,
+    0.16307095286109707,
+    0.21636213129702167,
+    0.27674237157641146,
+    0.35009192924056776,
+    0.4535648440640396,
+];
+const BOUNDARIES_4B_D32: [f64; 15] = [
+    -0.40182838665230336,
+    -0.31341715040848994,
+    -0.24655225143671677,
+    -0.18971654207905933,
+    -0.13854256407364451,
+    -0.09075671028293111,
+    -0.04492713086766463,
+    0.0,
+    0.044927130867664464,
+    0.09075671028293086,
+    0.1385425640736443,
+    0.18971654207905936,
+    0.24655225143671655,
+    0.3134171504084896,
+    0.4018283866523037,
+];
 
 // 2-bit, d=64
 const CENTROIDS_2B_D64: [f64; 4] = [
@@ -483,13 +565,16 @@ mod tests {
     /// Bit width for 2-bit quantization in tests.
     const TEST_BITS_2: u8 = 2;
     /// Known `(bits, dim)` pairs used in lookup tests.
-    const KNOWN_CODEBOOK_CONFIGS: [(u8, usize); 9] = [
+    const KNOWN_CODEBOOK_CONFIGS: [(u8, usize); 12] = [
+        (2, 32),
         (2, 64),
         (2, 128),
         (2, 256),
+        (3, 32),
         (3, 64),
         (3, 128),
         (3, 256),
+        (4, 32),
         (4, 64),
         (4, 128),
         (4, 256),
@@ -623,7 +708,7 @@ mod tests {
     #[test]
     fn lookup_unknown_config_returns_none() {
         assert!(lookup_static_codebook_ref(3, 512).is_none());
-        assert!(lookup_static_codebook(4, 32).is_none());
+        assert!(lookup_static_codebook(4, 16).is_none());
     }
 
     // -- centroid_count -----------------------------------------------------

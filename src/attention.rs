@@ -6,9 +6,11 @@
 //! This is the main entry point for users who want to quantize and query
 //! KV-caches in a transformer model.
 
+use half::f16;
+
 use crate::codebook::get_codebook;
 use crate::error::{check_values_match, require, Result, TurboQuantError};
-use crate::packed::TurboQuantConfig;
+use crate::packed::{PackedBlock, TurboQuantConfig};
 use crate::qjl::{
     estimate_inner_product_with_codebook, precompute_query_projections, quantize_with_qjl,
     EstimationContext, QjlBlock,
@@ -132,6 +134,80 @@ fn check_range(start: usize, end: usize, entry_count: usize) -> Result<()> {
             entry_count,
         },
     )
+}
+
+// ---------------------------------------------------------------------------
+// GPU import parameter struct
+// ---------------------------------------------------------------------------
+
+/// Parameters for [`QuantizedKVCache::import_packed_range`].
+///
+/// Groups the many arguments needed to reconstruct QjlBlocks from
+/// GPU-quantized flat buffers into a single struct.
+pub struct PackedImport<'a> {
+    /// Target layer index.
+    pub layer: usize,
+    /// Polar block bit width (2 for TQ3, 3 for TQ4).
+    pub polar_bits: u8,
+    /// Concatenated polar block packed indices.
+    pub packed_bytes: &'a [u8],
+    /// Polar block scale factors as raw u16 (f16 bits).
+    pub scales: &'a [u16],
+    /// Concatenated QJL sign bytes.
+    pub qjl_signs_flat: &'a [u8],
+    /// Residual L2 norms as raw u16 (f16 bits).
+    pub residual_norms: &'a [u16],
+    /// Number of packed bytes per polar block.
+    pub bytes_per_block: usize,
+    /// Number of QJL sign bytes per block (= ceil(dim/8)).
+    pub signs_per_block: usize,
+    /// `true` for keys, `false` for values.
+    pub is_keys: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Pure Operation helpers for GPU export/import
+// ---------------------------------------------------------------------------
+
+/// Collects packed polar block bytes and f16 scales from a slice of QjlBlocks.
+///
+/// Pure Operation: accessor calls and collection only.
+fn collect_packed_data(blocks: &[QjlBlock]) -> (Vec<u8>, Vec<u16>) {
+    if blocks.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let bytes_per_block = blocks[0].polar_block().packed_indices().len();
+    let mut packed_bytes = Vec::with_capacity(blocks.len() * bytes_per_block);
+    let mut scales = Vec::with_capacity(blocks.len());
+
+    for block in blocks {
+        let polar = block.polar_block();
+        packed_bytes.extend_from_slice(polar.packed_indices());
+        scales.push(polar.scale().to_bits());
+    }
+
+    (packed_bytes, scales)
+}
+
+/// Reconstructs a single QjlBlock from flat packed buffers at a given index.
+///
+/// Pure Operation: slicing and construction only.
+fn reconstruct_block(import: &PackedImport<'_>, index: usize) -> QjlBlock {
+    let pb_start = index * import.bytes_per_block;
+    let pb_end = pb_start + import.bytes_per_block;
+    let polar_block = PackedBlock::from_raw(
+        import.polar_bits,
+        f16::from_bits(import.scales[index]),
+        import.packed_bytes[pb_start..pb_end].to_vec(),
+    );
+
+    let qs_start = index * import.signs_per_block;
+    let qs_end = qs_start + import.signs_per_block;
+    let qjl_signs = import.qjl_signs_flat[qs_start..qs_end].to_vec();
+
+    let residual_norm = f16::from_bits(import.residual_norms[index]);
+
+    QjlBlock::from_parts(polar_block, qjl_signs, residual_norm)
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +451,16 @@ impl QuantizedKVCache {
         layer_len(&self.keys[layer])
     }
 
+    /// Returns a reference to the key QjlBlock at `(layer, index)`.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by mistral.rs TurboQuantKVCache for QJL data access
+    pub fn key_block(&self, layer: usize, index: usize) -> Option<&QjlBlock> {
+        self.keys.get(layer).and_then(|blocks| blocks.get(index))
+    }
+
     /// Number of layers in the cache.
     ///
     /// Pure Operation: field access only.
@@ -520,6 +606,94 @@ impl QuantizedKVCache {
         end: usize,
     ) -> Result<Vec<Vec<f32>>> {
         self.dequantize_blocks_range(layer, start, end, &self.values)
+    }
+
+    // -----------------------------------------------------------------------
+    // Block selection helpers (Pure Operation: field access only)
+    // -----------------------------------------------------------------------
+
+    /// Returns a reference to the key or value blocks at a given layer.
+    fn select_blocks(&self, layer: usize, is_keys: bool) -> &[QjlBlock] {
+        if is_keys {
+            &self.keys[layer]
+        } else {
+            &self.values[layer]
+        }
+    }
+
+    /// Returns a mutable reference to the key or value blocks at a given layer.
+    fn select_blocks_mut(&mut self, layer: usize, is_keys: bool) -> &mut Vec<QjlBlock> {
+        if is_keys {
+            &mut self.keys[layer]
+        } else {
+            &mut self.values[layer]
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // GPU integration: export / import packed data
+    // -----------------------------------------------------------------------
+
+    /// Returns the quantization configuration.
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by GPU kernel integration
+    pub fn config(&self) -> &TurboQuantConfig {
+        &self.config
+    }
+
+    /// Returns the QJL seed used for Rademacher matrix generation.
+    ///
+    /// Pure Operation: field access only.
+    // qual:api — used by GPU kernel integration
+    pub fn qjl_seed(&self) -> u64 {
+        self.qjl_seed
+    }
+
+    /// Exports packed polar block data for a range of entries at a given layer.
+    ///
+    /// Returns `(flat_packed_bytes, scales_as_u16)` where:
+    /// - `flat_packed_bytes` contains all `polar_block.packed_indices()` concatenated
+    /// - `scales_as_u16` contains each `polar_block.scale()` as raw `u16` bits
+    ///
+    /// This is the primary interface for bulk-transferring quantized data to GPU
+    /// memory for GPU-side dequantization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TurboQuantError::LayerOutOfRange`] or
+    /// [`TurboQuantError::RangeOutOfBounds`] on invalid arguments.
+    // qual:api — used by GPU kernel integration for bulk data export
+    pub fn export_packed_range(
+        &self,
+        layer: usize,
+        start: usize,
+        end: usize,
+        is_keys: bool,
+    ) -> Result<(Vec<u8>, Vec<u16>)> {
+        check_layer(layer, self.num_layers())?;
+        let blocks = self.select_blocks(layer, is_keys);
+        check_range(start, end, blocks.len())?;
+        Ok(collect_packed_data(&blocks[start..end]))
+    }
+
+    /// Imports GPU-quantized data as QjlBlocks into the cache at a given layer.
+    ///
+    /// See [`PackedImport`] for field documentation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TurboQuantError::LayerOutOfRange`] on invalid layer.
+    // qual:api — used by GPU kernel integration for importing quantized data
+    pub fn import_packed_range(&mut self, import: &PackedImport<'_>) -> Result<()> {
+        check_layer(import.layer, self.num_layers())?;
+        let count = import.scales.len();
+        let target = self.select_blocks_mut(import.layer, import.is_keys);
+        target.reserve(count);
+        for i in 0..count {
+            target.push(reconstruct_block(import, i));
+        }
+        Ok(())
     }
 }
 
@@ -1370,5 +1544,106 @@ mod tests {
         // Dequantize should give 4 entries
         let all_keys = cache.dequantize_all_keys(TEST_LAYER).unwrap();
         assert_eq!(all_keys.len(), 4);
+    }
+
+    // -- GPU export/import helper tests --------------------------------------
+
+    #[test]
+    fn collect_packed_data_empty() {
+        let (bytes, scales) = collect_packed_data(&[]);
+        assert!(bytes.is_empty());
+        assert!(scales.is_empty());
+    }
+
+    #[test]
+    fn collect_packed_data_roundtrip() {
+        let config = test_config();
+        let mut cache = QuantizedKVCache::new(config, TEST_NUM_LAYERS, TEST_QJL_SEED);
+        let key = pseudo_random_vec(TEST_DIM, TEST_KEY_SEED);
+        let val = pseudo_random_vec(TEST_DIM, TEST_VALUE_SEED);
+        cache.push(TEST_LAYER, &key, &val).unwrap();
+
+        // Export via collect_packed_data (tested function)
+        let (packed, scales) = cache.export_packed_range(TEST_LAYER, 0, 1, true).unwrap();
+        assert!(!packed.is_empty());
+        assert_eq!(scales.len(), 1);
+
+        // The exported data should allow reconstruction
+        let key2 = pseudo_random_vec(TEST_DIM, TEST_KEY_SEED_2);
+        let val2 = pseudo_random_vec(TEST_DIM, TEST_VALUE_SEED_2);
+        cache.push(TEST_LAYER, &key2, &val2).unwrap();
+        let (packed2, scales2) = cache.export_packed_range(TEST_LAYER, 0, 2, true).unwrap();
+        assert_eq!(scales2.len(), 2);
+        // First block's packed data should match
+        let bytes_per_block = packed.len();
+        assert_eq!(&packed2[..bytes_per_block], &packed[..]);
+    }
+
+    #[test]
+    fn reconstruct_block_preserves_data() {
+        let config = test_config();
+        let mut cache = QuantizedKVCache::new(config, TEST_NUM_LAYERS, TEST_QJL_SEED);
+        let key = pseudo_random_vec(TEST_DIM, TEST_KEY_SEED);
+        let val = pseudo_random_vec(TEST_DIM, TEST_VALUE_SEED);
+        cache.push(TEST_LAYER, &key, &val).unwrap();
+
+        // Export, then reconstruct via import
+        let (packed, scales) = cache.export_packed_range(TEST_LAYER, 0, 1, true).unwrap();
+        let bytes_per_block = packed.len();
+        let signs_per_block = (TEST_DIM + 7) / 8;
+        // Need QJL signs too — create dummy ones for the test
+        let qjl_signs = vec![0u8; signs_per_block];
+        let residual_norms = vec![0u16; 1];
+
+        let import = PackedImport {
+            layer: TEST_LAYER,
+            polar_bits: BITS_3 - 1,
+            packed_bytes: &packed,
+            scales: &scales,
+            qjl_signs_flat: &qjl_signs,
+            residual_norms: &residual_norms,
+            bytes_per_block,
+            signs_per_block,
+            is_keys: false,
+        };
+        let block = reconstruct_block(&import, 0);
+        assert_eq!(block.polar_block().packed_indices(), &packed[..]);
+        assert_eq!(block.polar_block().scale().to_bits(), scales[0]);
+    }
+
+    #[test]
+    fn select_blocks_returns_correct_side() {
+        let config = test_config();
+        let mut cache = QuantizedKVCache::new(config, TEST_NUM_LAYERS, TEST_QJL_SEED);
+        let key = pseudo_random_vec(TEST_DIM, TEST_KEY_SEED);
+        let val = pseudo_random_vec(TEST_DIM, TEST_VALUE_SEED);
+        cache.push(TEST_LAYER, &key, &val).unwrap();
+
+        let keys = cache.select_blocks(TEST_LAYER, true);
+        let vals = cache.select_blocks(TEST_LAYER, false);
+        assert_eq!(keys.len(), 1);
+        assert_eq!(vals.len(), 1);
+
+        // Keys and values should have different packed data (different input vectors)
+        assert_ne!(
+            keys[0].polar_block().packed_indices(),
+            vals[0].polar_block().packed_indices()
+        );
+    }
+
+    #[test]
+    fn select_blocks_mut_allows_push() {
+        let config = test_config();
+        let mut cache = QuantizedKVCache::new(config, TEST_NUM_LAYERS, TEST_QJL_SEED);
+        assert_eq!(cache.select_blocks(TEST_LAYER, true).len(), 0);
+
+        // Push via the normal API
+        let key = pseudo_random_vec(TEST_DIM, TEST_KEY_SEED);
+        let val = pseudo_random_vec(TEST_DIM, TEST_VALUE_SEED);
+        cache.push(TEST_LAYER, &key, &val).unwrap();
+
+        // select_blocks_mut should see the entry
+        let keys_mut = cache.select_blocks_mut(TEST_LAYER, true);
+        assert_eq!(keys_mut.len(), 1);
     }
 }
