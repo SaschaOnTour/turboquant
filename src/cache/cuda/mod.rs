@@ -6,3 +6,5 @@
 pub mod attention;
 #[cfg(feature = "cuda")]
 pub(crate) mod ffi;
+#[cfg(feature = "cuda")]
+pub(crate) mod quantize;

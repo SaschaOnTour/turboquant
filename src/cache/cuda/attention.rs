@@ -12,48 +12,69 @@ use super::ffi;
 
 const PARTITION_SIZE: usize = 512;
 
+/// Parameters for the fused attention CUDA kernel.
+pub struct FusedAttentionParams<'a> {
+    pub q: &'a Tensor,
+    pub k_indices: &'a Tensor,
+    pub k_scales: &'a Tensor,
+    pub v_indices: &'a Tensor,
+    pub v_scales: &'a Tensor,
+    pub codebook: &'a Tensor,
+    pub sign_pattern: &'a Tensor,
+    pub num_attention_heads: usize,
+    pub num_kv_heads: usize,
+    pub head_dim: usize,
+    pub kv_len: usize,
+    pub kv_stride: usize,
+    pub packed_dim: usize,
+    pub num_qblocks: usize,
+    pub bits: usize,
+    pub softmax_scale: f32,
+    pub device: &'a Device,
+}
+
 /// Launch the TurboQuant fused attention kernel on GPU.
 ///
 /// Two-phase: partitioned attention + reduce.
 /// Returns attention output `[num_attention_heads, head_dim]`.
-pub fn fused_attention(
-    q: &Tensor,
-    k_indices: &Tensor,
-    k_scales: &Tensor,
-    v_indices: &Tensor,
-    v_scales: &Tensor,
-    codebook: &Tensor,
-    sign_pattern: &Tensor,
-    num_attention_heads: usize,
-    num_kv_heads: usize,
-    head_dim: usize,
-    kv_len: usize,
-    kv_stride: usize,
-    packed_dim: usize,
-    num_qblocks: usize,
-    bits: usize,
-    softmax_scale: f32,
-    device: &Device,
-) -> Result<Tensor> {
+// qual:allow(TQ-003) — CUDA-only, tested via mistral.rs integration tests
+pub fn fused_attention(p: &FusedAttentionParams<'_>) -> Result<Tensor> {
+    let FusedAttentionParams {
+        q,
+        k_indices,
+        k_scales,
+        v_indices,
+        v_scales,
+        codebook,
+        sign_pattern,
+        num_attention_heads,
+        num_kv_heads,
+        head_dim,
+        kv_len,
+        kv_stride,
+        packed_dim,
+        num_qblocks,
+        bits,
+        softmax_scale,
+        device,
+    } = p;
     let Device::Cuda(dev) = device else {
         candle_core::bail!("fused_attention requires CUDA device");
     };
 
-    let output = Tensor::zeros((num_attention_heads, head_dim), DType::F32, device)?;
-    if kv_len == 0 || num_kv_heads == 0 {
+    let output = Tensor::zeros((*num_attention_heads, *head_dim), DType::F32, device)?;
+    if *kv_len == 0 || *num_kv_heads == 0 {
         return Ok(output);
     }
 
-    let num_partitions = (kv_len + PARTITION_SIZE - 1) / PARTITION_SIZE;
+    let num_partitions = (*kv_len + PARTITION_SIZE - 1) / PARTITION_SIZE;
     let partial_out = Tensor::zeros(
-        (num_attention_heads * num_partitions, head_dim),
+        (*num_attention_heads * num_partitions, *head_dim),
         DType::F32,
         device,
     )?;
-    let partial_max =
-        Tensor::zeros((num_attention_heads * num_partitions,), DType::F32, device)?;
-    let partial_sum =
-        Tensor::zeros((num_attention_heads * num_partitions,), DType::F32, device)?;
+    let partial_max = Tensor::zeros((*num_attention_heads * num_partitions,), DType::F32, device)?;
+    let partial_sum = Tensor::zeros((*num_attention_heads * num_partitions,), DType::F32, device)?;
 
     let stream = dev.cuda_stream().cu_stream() as _;
 
@@ -134,15 +155,15 @@ pub fn fused_attention(
                 std::ptr::null(),
                 std::ptr::null(),
                 0, // qjl_enabled = false
-                num_attention_heads as i32,
-                num_kv_heads as i32,
-                head_dim as i32,
-                kv_len as i32,
-                kv_stride as i32,
-                packed_dim as i32,
-                num_qblocks as i32,
-                bits as i32,
-                softmax_scale,
+                *num_attention_heads as i32,
+                *num_kv_heads as i32,
+                *head_dim as i32,
+                *kv_len as i32,
+                *kv_stride as i32,
+                *packed_dim as i32,
+                *num_qblocks as i32,
+                *bits as i32,
+                *softmax_scale,
                 num_partitions as i32,
                 stream,
             );

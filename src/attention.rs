@@ -175,12 +175,12 @@ pub struct PackedImport<'a> {
 fn collect_packed_data(blocks: &[QjlBlock]) -> (Vec<u8>, Vec<u16>) {
     let packed_bytes: Vec<u8> = blocks
         .iter()
-        .flat_map(|b| b.polar_block().packed_indices())
+        .flat_map(|b| &b.polar_block.packed_indices)
         .copied()
         .collect();
     let scales: Vec<u16> = blocks
         .iter()
-        .map(|b| b.polar_block().scale().to_bits())
+        .map(|b| b.polar_block.scale.to_bits())
         .collect();
     (packed_bytes, scales)
 }
@@ -327,7 +327,7 @@ impl QuantizedKVCache {
             if keys.is_empty() {
                 return Ok(Vec::new());
             }
-            let polar_bits = keys[0].polar_block.bits();
+            let polar_bits = keys[0].polar_block.bits;
             let polar_config = TurboQuantConfig::new(polar_bits, self.config.dim)?
                 .with_seed(self.config.rotation_seed);
             let codebook = get_codebook(polar_bits, self.config.dim)?;
@@ -357,7 +357,7 @@ impl QuantizedKVCache {
     /// Each value is fully dequantized (with inverse rotation) before
     /// accumulation, because summed values require the original domain.
     /// The polar block uses `(bits-1)` bits, so we create the appropriate
-    /// config from each block's `polar_block.bits()`.
+    /// config from each block's `polar_block.bits`.
     ///
     /// Integration: validates layer and weights length, then delegates to
     /// `dequantize_vec` and `accumulate_weighted`.
@@ -381,7 +381,7 @@ impl QuantizedKVCache {
                 return Ok(());
             }
             // Fetch codebook, sign pattern, and polar config ONCE before the loop.
-            let polar_bits = values[0].polar_block.bits();
+            let polar_bits = values[0].polar_block.bits;
             let polar_config =
                 TurboQuantConfig::new(polar_bits, dim)?.with_seed(self.config.rotation_seed);
             let codebook = get_codebook(polar_bits, dim)?;
@@ -517,7 +517,7 @@ impl QuantizedKVCache {
             return Ok(Vec::new());
         }
         let dim = self.config.dim;
-        let polar_bits = blocks[0].polar_block.bits();
+        let polar_bits = blocks[0].polar_block.bits;
         let polar_config =
             TurboQuantConfig::new(polar_bits, dim)?.with_seed(self.config.rotation_seed);
         let codebook = get_codebook(polar_bits, dim)?;
@@ -649,8 +649,8 @@ impl QuantizedKVCache {
     /// Exports packed polar block data for a range of entries at a given layer.
     ///
     /// Returns `(flat_packed_bytes, scales_as_u16)` where:
-    /// - `flat_packed_bytes` contains all `polar_block.packed_indices()` concatenated
-    /// - `scales_as_u16` contains each `polar_block.scale()` as raw `u16` bits
+    /// - `flat_packed_bytes` contains all `polar_block.packed_indices` concatenated
+    /// - `scales_as_u16` contains each `polar_block.scale` as raw `u16` bits
     ///
     /// This is the primary interface for bulk-transferring quantized data to GPU
     /// memory for GPU-side dequantization.
@@ -1604,8 +1604,8 @@ mod tests {
             is_keys: false,
         };
         let block = reconstruct_block(&import, 0);
-        assert_eq!(block.polar_block().packed_indices(), &packed[..]);
-        assert_eq!(block.polar_block().scale().to_bits(), scales[0]);
+        assert_eq!(block.polar_block.packed_indices, &packed[..]);
+        assert_eq!(block.polar_block.scale.to_bits(), scales[0]);
     }
 
     #[test]
@@ -1623,8 +1623,8 @@ mod tests {
 
         // Keys and values should have different packed data (different input vectors)
         assert_ne!(
-            keys[0].polar_block().packed_indices(),
-            vals[0].polar_block().packed_indices()
+            keys[0].polar_block.packed_indices,
+            vals[0].polar_block.packed_indices
         );
     }
 

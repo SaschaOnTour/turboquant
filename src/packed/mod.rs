@@ -9,6 +9,20 @@ use half::f16;
 
 use crate::error::{require, Result, TurboQuantError};
 
+pub mod indices;
+pub use indices::{
+    pack_indices_2bit, pack_indices_3bit, pack_indices_4bit, unpack_indices_2bit,
+    unpack_indices_3bit, unpack_indices_4bit,
+};
+// Re-export internal helpers for use by the tests submodule.
+#[allow(unused_imports)]
+use indices::{
+    chunk_to_2bit_array, chunk_to_3bit_array, chunk_to_4bit_array, chunk_to_packed_3bit_array,
+    has_2bit_remainder, has_3bit_remainder, has_4bit_remainder, num_2bit_groups, num_3bit_groups,
+    num_4bit_pairs, packed_2bit_capacity, packed_3bit_capacity, packed_4bit_capacity,
+    pad_remainder_2bit, pad_remainder_3bit, trailing_4bit_pair,
+};
+
 // ---------------------------------------------------------------------------
 // Named constants (eliminates magic numbers)
 // ---------------------------------------------------------------------------
@@ -123,29 +137,6 @@ impl TurboQuantConfig {
         self
     }
 
-    /// Returns the bit width (2, 3, or 4).
-    ///
-    /// Pure Operation: field access only.
-    // qual:api — used by GPU kernel integration
-    pub fn bits(&self) -> u8 {
-        self.bits
-    }
-
-    /// Returns the vector dimension.
-    ///
-    /// Pure Operation: field access only.
-    // qual:api — used by GPU kernel integration
-    pub fn dim(&self) -> usize {
-        self.dim
-    }
-
-    /// Returns the rotation seed.
-    ///
-    /// Pure Operation: field access only.
-    // qual:api — used by GPU kernel integration
-    pub fn rotation_seed(&self) -> u64 {
-        self.rotation_seed
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,11 +149,11 @@ impl TurboQuantConfig {
 /// single type that tracks its own bit width.
 pub struct PackedBlock {
     /// Bit width used for packing (2, 3, or 4).
-    bits: u8,
+    pub bits: u8,
     /// Scaling factor (L2-norm of original vector).
-    scale: f16,
+    pub scale: f16,
     /// Packed indices (layout depends on `bits`).
-    packed_indices: Vec<u8>,
+    pub packed_indices: Vec<u8>,
 }
 
 impl PackedBlock {
@@ -188,32 +179,12 @@ impl PackedBlock {
         }
     }
 
-    /// Returns the f16 scale factor stored in the block.
-    ///
-    /// Pure Operation: field access only (TRIVIAL classification).
-    pub fn scale(&self) -> f16 {
-        self.scale
-    }
-
-    /// Returns the bit width used for packing.
-    ///
-    /// Pure Operation: field access only (TRIVIAL classification).
-    pub fn bits(&self) -> u8 {
-        self.bits
-    }
 
     /// Total size of the block in bytes (2 bytes for f16 scale + packed data).
     pub fn size_bytes(&self) -> usize {
         SCALE_SIZE_BYTES + self.packed_indices.len()
     }
 
-    /// Returns a reference to the raw packed index bytes.
-    ///
-    /// Pure Operation: field access only.
-    // qual:api — used by GPU kernel integration for bulk data export
-    pub fn packed_indices(&self) -> &[u8] {
-        &self.packed_indices
-    }
 
     /// Creates a `PackedBlock` from pre-packed data without re-packing.
     ///
@@ -289,87 +260,6 @@ pub fn unpack_2bit(packed: u8) -> [u8; PACK_2BIT_GROUP_SIZE] {
 }
 
 // ---------------------------------------------------------------------------
-// 2-bit vector-level helpers  (pure Operation -- arithmetic/logic only)
-// ---------------------------------------------------------------------------
-
-/// Compute the number of full groups of 4 that fit in `len` elements.
-///
-/// Pure Operation: arithmetic only.
-fn num_2bit_groups(len: usize) -> usize {
-    len / PACK_2BIT_GROUP_SIZE
-}
-
-/// Check whether `len` elements have a remainder after grouping by 4.
-///
-/// Pure Operation: arithmetic only.
-fn has_2bit_remainder(len: usize) -> bool {
-    len % PACK_2BIT_GROUP_SIZE != 0
-}
-
-/// Compute capacity for the packed 2-bit byte vector.
-///
-/// Pure Operation: arithmetic only.
-fn packed_2bit_capacity(num_groups: usize, has_remainder: bool) -> usize {
-    num_groups + usize::from(has_remainder)
-}
-
-/// Convert a chunk of exactly 4 bytes into the fixed-size array expected by
-/// `pack_2bit`.
-///
-/// Pure Operation: slice-to-array conversion only.
-fn chunk_to_2bit_array(chunk: &[u8]) -> [u8; PACK_2BIT_GROUP_SIZE] {
-    chunk.try_into().expect("chunk size matches group size")
-}
-
-/// Pad a remainder slice (< 4 elements) into a full 4-element array, filling
-/// the tail with zeros.
-///
-/// Pure Operation: copy only.
-fn pad_remainder_2bit(tail: &[u8]) -> [u8; PACK_2BIT_GROUP_SIZE] {
-    let mut padded = [0u8; PACK_2BIT_GROUP_SIZE];
-    padded[..tail.len()].copy_from_slice(tail);
-    padded
-}
-
-// ---------------------------------------------------------------------------
-// 2-bit vector-level packing  (pure Integration functions)
-// ---------------------------------------------------------------------------
-
-/// Pack a full vector of 2-bit indices into a compact byte vector.
-///
-/// Each group of 4 indices produces 1 byte. If the length is not a multiple of
-/// 4, the remainder is zero-padded.
-///
-/// Pure Integration: delegates to `pack_indices_chunked`.
-pub fn pack_indices_2bit(indices: &[u8]) -> Vec<u8> {
-    pack_indices_chunked(
-        indices,
-        PACK_2BIT_GROUP_SIZE,
-        packed_2bit_capacity(
-            num_2bit_groups(indices.len()),
-            has_2bit_remainder(indices.len()),
-        ),
-        |chunk, out| out.push(pack_2bit(&chunk_to_2bit_array(chunk))),
-        |tail, out| out.push(pack_2bit(&pad_remainder_2bit(tail))),
-    )
-}
-
-/// Unpack a compact byte vector into `count` 2-bit index values.
-///
-/// Pure Integration: orchestrates helpers and `unpack_2bit`, no inline logic.
-pub fn unpack_indices_2bit(packed: &[u8], count: usize) -> Vec<u8> {
-    let mut result = Vec::with_capacity(count);
-
-    for &byte in packed {
-        let vals = unpack_2bit(byte);
-        result.extend_from_slice(&vals);
-    }
-
-    result.truncate(count);
-    result
-}
-
-// ---------------------------------------------------------------------------
 // 3-bit packing / unpacking  (pure Operation functions)
 // ---------------------------------------------------------------------------
 
@@ -422,201 +312,6 @@ pub fn unpack_4bit(packed: u8) -> [u8; 2] {
 }
 
 // ---------------------------------------------------------------------------
-// 3-bit vector-level helpers  (pure Operation -- arithmetic/logic only)
-// ---------------------------------------------------------------------------
-
-/// Compute the number of full groups of 8 that fit in `len` elements.
-///
-/// Pure Operation: arithmetic only.
-fn num_3bit_groups(len: usize) -> usize {
-    len / PACK_3BIT_GROUP_SIZE
-}
-
-/// Check whether `len` elements have a remainder after grouping by 8.
-///
-/// Pure Operation: arithmetic only.
-fn has_3bit_remainder(len: usize) -> bool {
-    len % PACK_3BIT_GROUP_SIZE != 0
-}
-
-/// Compute capacity for the packed 3-bit byte vector.
-///
-/// Pure Operation: arithmetic only, no calls to other project functions.
-fn packed_3bit_capacity(num_groups: usize, has_remainder: bool) -> usize {
-    let remainder_bytes = if has_remainder { PACK_3BIT_BYTES } else { 0 };
-    num_groups * PACK_3BIT_BYTES + remainder_bytes
-}
-
-/// Convert a chunk of exactly 8 bytes into the fixed-size array expected by
-/// `pack_3bit`.
-///
-/// Pure Operation: slice-to-array conversion only.
-fn chunk_to_3bit_array(chunk: &[u8]) -> [u8; PACK_3BIT_GROUP_SIZE] {
-    chunk.try_into().expect("chunk size matches group size")
-}
-
-/// Pad a remainder slice (< 8 elements) into a full 8-element array, filling
-/// the tail with zeros.
-///
-/// Pure Operation: copy only.
-fn pad_remainder_3bit(tail: &[u8]) -> [u8; PACK_3BIT_GROUP_SIZE] {
-    let mut padded = [0u8; PACK_3BIT_GROUP_SIZE];
-    padded[..tail.len()].copy_from_slice(tail);
-    padded
-}
-
-/// Convert a 3-byte chunk into the fixed-size array expected by `unpack_3bit`.
-///
-/// Pure Operation: slice-to-array conversion only.
-fn chunk_to_packed_3bit_array(chunk: &[u8]) -> [u8; PACK_3BIT_BYTES] {
-    chunk.try_into().expect("chunk size matches group size")
-}
-
-// ---------------------------------------------------------------------------
-// 4-bit vector-level helpers  (pure Operation -- arithmetic/logic only)
-// ---------------------------------------------------------------------------
-
-/// Compute the number of full pairs that fit in `len` elements.
-///
-/// Pure Operation: arithmetic only.
-fn num_4bit_pairs(len: usize) -> usize {
-    len / PACK_4BIT_GROUP_SIZE
-}
-
-/// Check whether `len` elements have a trailing odd element.
-///
-/// Pure Operation: arithmetic only.
-fn has_4bit_remainder(len: usize) -> bool {
-    len % PACK_4BIT_GROUP_SIZE != 0
-}
-
-/// Compute capacity for the packed 4-bit byte vector.
-///
-/// Pure Operation: arithmetic only.
-fn packed_4bit_capacity(num_pairs: usize, has_remainder: bool) -> usize {
-    num_pairs + usize::from(has_remainder)
-}
-
-/// Convert a 2-byte chunk into the fixed-size array expected by `pack_4bit`.
-///
-/// Pure Operation: slice-to-array conversion only.
-fn chunk_to_4bit_array(pair: &[u8]) -> [u8; PACK_4BIT_GROUP_SIZE] {
-    pair.try_into().expect("chunk size matches group size")
-}
-
-/// Build the pair for packing a trailing odd element (high nibble is zero).
-///
-/// Pure Operation: value construction only.
-fn trailing_4bit_pair(last: u8) -> [u8; PACK_4BIT_GROUP_SIZE] {
-    [last, 0]
-}
-
-// ---------------------------------------------------------------------------
-// Generic chunked packing helper  (pure Integration)
-// ---------------------------------------------------------------------------
-
-/// Generic bit-packing: splits `indices` into chunks of `group_size`, packs
-/// each chunk with `pack_group`, and handles the remainder with `pack_remainder`.
-///
-/// Pure Integration: only calls the provided closures and extends the output vector.
-fn pack_indices_chunked<F, R>(
-    indices: &[u8],
-    group_size: usize,
-    capacity: usize,
-    mut pack_group: F,
-    mut pack_remainder: R,
-) -> Vec<u8>
-where
-    F: FnMut(&[u8], &mut Vec<u8>),
-    R: FnMut(&[u8], &mut Vec<u8>),
-{
-    let mut packed = Vec::with_capacity(capacity);
-    for chunk in indices.chunks_exact(group_size) {
-        pack_group(chunk, &mut packed);
-    }
-    let mut handle_tail = || {
-        let tail = indices.chunks_exact(group_size).remainder();
-        if tail.is_empty() {
-            return;
-        }
-        pack_remainder(tail, &mut packed);
-    };
-    handle_tail();
-    packed
-}
-
-// ---------------------------------------------------------------------------
-// Vector-level packing  (pure Integration functions -- delegate only)
-// ---------------------------------------------------------------------------
-
-/// Pack a full vector of 3-bit indices into a compact byte vector.
-///
-/// The input length must be a multiple of 8. Each group of 8 indices produces 3
-/// bytes.
-///
-/// Pure Integration: delegates to `pack_indices_chunked`.
-pub fn pack_indices_3bit(indices: &[u8]) -> Vec<u8> {
-    pack_indices_chunked(
-        indices,
-        PACK_3BIT_GROUP_SIZE,
-        packed_3bit_capacity(
-            num_3bit_groups(indices.len()),
-            has_3bit_remainder(indices.len()),
-        ),
-        |chunk, out| out.extend_from_slice(&pack_3bit(&chunk_to_3bit_array(chunk))),
-        |tail, out| out.extend_from_slice(&pack_3bit(&pad_remainder_3bit(tail))),
-    )
-}
-
-/// Unpack a compact byte vector into `count` 3-bit index values.
-///
-/// Pure Integration: orchestrates helpers and `unpack_3bit`, no inline logic.
-pub fn unpack_indices_3bit(packed: &[u8], count: usize) -> Vec<u8> {
-    let mut result = Vec::with_capacity(count);
-
-    for chunk in packed.chunks_exact(PACK_3BIT_BYTES) {
-        let arr = chunk_to_packed_3bit_array(chunk);
-        let vals = unpack_3bit(&arr);
-        result.extend_from_slice(&vals);
-    }
-
-    result.truncate(count);
-    result
-}
-
-/// Pack a full vector of 4-bit indices into a compact byte vector.
-///
-/// Each pair of indices produces 1 byte. If the length is odd the last index is
-/// packed alone (high nibble is zero).
-///
-/// Pure Integration: delegates to `pack_indices_chunked`.
-pub fn pack_indices_4bit(indices: &[u8]) -> Vec<u8> {
-    pack_indices_chunked(
-        indices,
-        PACK_4BIT_GROUP_SIZE,
-        packed_4bit_capacity(
-            num_4bit_pairs(indices.len()),
-            has_4bit_remainder(indices.len()),
-        ),
-        |chunk, out| out.push(pack_4bit(&chunk_to_4bit_array(chunk))),
-        |tail, out| out.push(pack_4bit(&trailing_4bit_pair(tail[0]))),
-    )
-}
-
-/// Unpack a compact byte vector into `count` 4-bit index values.
-pub fn unpack_indices_4bit(packed: &[u8], count: usize) -> Vec<u8> {
-    let mut result = Vec::with_capacity(count);
-
-    for &byte in packed {
-        let vals = unpack_4bit(byte);
-        result.extend_from_slice(&vals);
-    }
-
-    result.truncate(count);
-    result
-}
-
-// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
@@ -649,6 +344,12 @@ mod tests {
     /// Number of 4-bit levels (2^4).
     const TEST_4BIT_LEVELS: u8 = 16;
 
+    /// Number of 3-bit levels (2^3).
+    const TEST_3BIT_LEVELS: usize = 8;
+    /// Test scale value.
+    const TEST_SCALE: f32 = 1.5;
+    /// Test scale value (half).
+    const TEST_SCALE_HALF: f32 = 0.5;
     /// Maximum valid 2-bit value (2^2 - 1).
     const MAX_2BIT_VALUE: u8 = 3;
     /// Number of 2-bit indices in exact-multiple roundtrip test (3 groups of 4).
@@ -974,13 +675,13 @@ mod tests {
     #[test]
     fn packed_indices_returns_raw_bytes() {
         let indices = vec![1u8, 2, 3, 0, 1, 2, 3, 0];
-        let block = PackedBlock::new(BITS_TQ2, f16::from_f32(1.5), &indices);
-        let raw = block.packed_indices();
+        let block = PackedBlock::new(BITS_TQ2, f16::from_f32(TEST_SCALE), &indices);
+        let raw = block.packed_indices;
         // 8 indices at 2-bit = 2 bytes
         assert_eq!(raw.len(), 2);
         // Unpack roundtrip: packing then accessing raw should match re-packing
-        let block2 = PackedBlock::new(BITS_TQ2, f16::from_f32(1.5), &indices);
-        assert_eq!(raw, block2.packed_indices());
+        let block2 = PackedBlock::new(BITS_TQ2, f16::from_f32(TEST_SCALE), &indices);
+        assert_eq!(raw, block2.packed_indices);
     }
 
     #[test]
@@ -988,7 +689,7 @@ mod tests {
         let indices = vec![0u8; TEST_DIM_128];
         let block = PackedBlock::new(BITS_TQ3, f16::from_f32(1.0), &indices);
         // 128 indices at 3-bit: 128/8 = 16 groups × 3 bytes = 48 bytes
-        assert_eq!(block.packed_indices().len(), 48);
+        assert_eq!(block.packed_indices.len(), 48);
     }
 
     // -- from_raw constructor ------------------------------------------------
@@ -998,25 +699,27 @@ mod tests {
         let indices = vec![3u8, 1, 0, 2, 3, 1, 0, 2];
         let original = PackedBlock::new(BITS_TQ2, f16::from_f32(2.0), &indices);
         let reconstructed = PackedBlock::from_raw(
-            original.bits(),
-            original.scale(),
-            original.packed_indices().to_vec(),
+            original.bits,
+            original.scale,
+            original.packed_indices.to_vec(),
         );
-        assert_eq!(reconstructed.bits(), original.bits());
-        assert_eq!(reconstructed.scale(), original.scale());
-        assert_eq!(reconstructed.packed_indices(), original.packed_indices());
+        assert_eq!(reconstructed.bits, original.bits);
+        assert_eq!(reconstructed.scale, original.scale);
+        assert_eq!(reconstructed.packed_indices, original.packed_indices);
         // Unpack should recover original indices
         assert_eq!(reconstructed.unpack(indices.len()), indices);
     }
 
     #[test]
     fn from_raw_3bit_roundtrip() {
-        let indices: Vec<u8> = (0..TEST_DIM_128).map(|i| (i % 8) as u8).collect();
-        let original = PackedBlock::new(BITS_TQ3, f16::from_f32(0.5), &indices);
+        let indices: Vec<u8> = (0..TEST_DIM_128)
+            .map(|i| (i % TEST_3BIT_LEVELS) as u8)
+            .collect();
+        let original = PackedBlock::new(BITS_TQ3, f16::from_f32(TEST_SCALE_HALF), &indices);
         let reconstructed = PackedBlock::from_raw(
             BITS_TQ3,
-            original.scale(),
-            original.packed_indices().to_vec(),
+            original.scale,
+            original.packed_indices.to_vec(),
         );
         assert_eq!(reconstructed.unpack(TEST_DIM_128), indices);
     }

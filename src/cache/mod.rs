@@ -10,6 +10,7 @@
 //!
 //! Requires the `candle` feature flag.
 
+mod common;
 pub mod config;
 pub mod cuda;
 mod pqo;
@@ -19,10 +20,10 @@ mod storage;
 mod tq;
 mod wht_tensor;
 
-pub use config::{QuantNormMode, QUANT_BLOCK_SIZE};
+pub use config::{CacheConfig, QuantNormMode, QUANT_BLOCK_SIZE};
 pub use pqo::PqoCache;
 pub use precomputed::GpuPrecomputed;
-pub use storage::CompressedStorage;
+pub use storage::{CompressedStorage, QuantizedKV};
 pub use tq::TqCache;
 
 /// Helper: create a candle error from a string message.

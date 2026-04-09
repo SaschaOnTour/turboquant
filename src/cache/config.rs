@@ -8,6 +8,9 @@
 /// quantizing the full head_dim=128 as a single block.
 pub const QUANT_BLOCK_SIZE: usize = 32;
 
+/// Bits per byte — used for byte-level packing/unpacking calculations.
+pub const BITS_PER_BYTE: usize = 8;
+
 /// Default seed for the deterministic WHT rotation sign pattern.
 pub const DEFAULT_ROTATION_SEED: u64 = 42;
 
@@ -37,6 +40,47 @@ impl std::str::FromStr for QuantNormMode {
                 "Unknown norm mode `{other}`. Options: maxnorm, l2norm"
             )),
         }
+    }
+}
+
+/// Configuration for TurboQuant compressed KV-cache.
+///
+/// Shared between [`PqoCache`], [`TqCache`], and [`GpuPrecomputed`].
+/// Use `outlier_blocks = usize::MAX` for PQO mode (recommended),
+/// or `outlier_blocks = 0` for TQ mode (with QJL correction).
+#[derive(Clone, Debug)]
+pub struct CacheConfig {
+    /// Total bit-width (3 or 4). Polar codebook uses `bits - 1`.
+    pub bits: u8,
+    /// Elements per attention head.
+    pub head_dim: usize,
+    /// Number of KV attention heads.
+    pub num_kv_heads: usize,
+    /// Number of transformer layers.
+    pub num_layers: usize,
+    /// Normalization strategy for block-level PolarQuant.
+    pub norm_mode: QuantNormMode,
+    /// Number of outlier blocks per head_dim vector.
+    /// `usize::MAX` = PQO (all outlier), `0` = TQ (standard codebook + QJL).
+    pub outlier_blocks: usize,
+}
+
+impl CacheConfig {
+    /// Whether QJL correction is needed (derived from `outlier_blocks`).
+    ///
+    /// QJL is used when no outlier blocks are present (TQ mode, `outlier_blocks == 0`).
+    pub fn qjl_enabled(&self) -> bool {
+        self.outlier_blocks == 0
+    }
+
+    /// Number of quantization blocks per head_dim vector.
+    pub fn num_blocks(&self) -> usize {
+        self.head_dim / QUANT_BLOCK_SIZE
+    }
+
+    /// Packed dimension: bytes per token for indices.
+    pub fn packed_dim(&self) -> usize {
+        self.head_dim * self.bits as usize / BITS_PER_BYTE
     }
 }
 

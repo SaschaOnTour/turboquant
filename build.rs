@@ -1,8 +1,7 @@
-use std::path::PathBuf;
-
 fn main() {
     #[cfg(feature = "cuda")]
     {
+        use std::path::PathBuf;
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_common.h");
         println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_dequant_kernel.cu");

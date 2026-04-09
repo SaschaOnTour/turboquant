@@ -433,16 +433,16 @@ fn algorithm2_formula_matches_implementation() {
 
     // --- Manual Algorithm 2 computation ---
     // Step 1: x̃_mse = DeQuantmse(idx) with (b-1) bits
-    let x_mse = dequantize_vec(&polar_config, block.polar_block()).unwrap();
+    let x_mse = dequantize_vec(&polar_config, &block.polar_block).unwrap();
     // Step 2: base = ⟨y, x̃_mse⟩
     let base = dot_product(&y, &x_mse);
     // Step 3: γ = ‖r‖₂
-    let gamma = block.residual_norm().to_f32();
+    let gamma = block.residual_norm.to_f32();
     // Step 4: c = √(π/2)/√d · γ
     let c = gamma * (SQRT_PI_OVER_2 as f32) / (DIM as f32).sqrt();
     // Step 5: correction = Σ_j (S·y)_j · qjl_j
     let s_y = precompute_query_projections(&y, DIM, qjl_seed);
-    let signs = block.qjl_signs();
+    let signs = &block.qjl_signs;
     let correction: f32 = s_y
         .iter()
         .enumerate()
@@ -549,7 +549,7 @@ fn residual_norm_equals_quantization_error() {
         let qjl_seed = 13579_u64.wrapping_add(i);
         let block = quantize_with_qjl(&config, &x, qjl_seed).unwrap();
 
-        let x_mse = dequantize_vec(&polar_config, block.polar_block()).unwrap();
+        let x_mse = dequantize_vec(&polar_config, &block.polar_block).unwrap();
         let residual_norm_manual: f32 = x
             .iter()
             .zip(x_mse.iter())
@@ -557,7 +557,7 @@ fn residual_norm_equals_quantization_error() {
             .sum::<f32>()
             .sqrt();
 
-        let residual_norm_stored = block.residual_norm().to_f32();
+        let residual_norm_stored = block.residual_norm.to_f32();
 
         let rel_diff = if residual_norm_manual > 1e-8 {
             (residual_norm_stored - residual_norm_manual).abs() / residual_norm_manual

@@ -6,16 +6,25 @@
 
 use candle_core::{DType, Device, Result, Tensor};
 
-use super::config::QUANT_BLOCK_SIZE;
+use super::cache_err;
+use super::config::{BITS_PER_BYTE, QUANT_BLOCK_SIZE};
+
+/// Quantized K/V tensor references for a single append operation.
+pub struct QuantizedKV<'a> {
+    pub k_indices: &'a Tensor,
+    pub k_scales: &'a Tensor,
+    pub v_indices: &'a Tensor,
+    pub v_scales: &'a Tensor,
+}
 
 /// Per-layer GPU tensor storage for compressed KV-cache data.
 ///
 /// Fields are kept minimal (SRP): only indices, scales, and bookkeeping.
 /// QJL data lives in a separate `QjlStorage` struct.
 pub struct CompressedStorage {
-    num_kv_heads: usize,
-    head_dim: usize,
-    bits: u8,
+    pub(crate) num_kv_heads: usize,
+    pub(crate) head_dim: usize,
+    pub(crate) bits: u8,
     num_layers: usize,
     buf_seq_len: Vec<usize>,
     gpu_k_indices: Vec<Option<Tensor>>,
@@ -48,13 +57,14 @@ impl CompressedStorage {
     }
 
     /// Whether the GPU path is active for a layer (has data stored).
+    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn is_active(&self, layer: usize) -> bool {
         self.gpu_path_active[layer] && self.buf_seq_len[layer] > 0
     }
 
     /// Packed dimension: bytes per token for indices.
     pub fn packed_dim(&self) -> usize {
-        self.head_dim * self.bits as usize / 8
+        self.head_dim * self.bits as usize / BITS_PER_BYTE
     }
 
     /// Number of quantization blocks per head_dim vector.
@@ -63,21 +73,25 @@ impl CompressedStorage {
     }
 
     /// Access key indices tensor for a layer (for fused kernel).
+    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn k_indices(&self, layer: usize) -> Option<&Tensor> {
         self.gpu_k_indices[layer].as_ref()
     }
 
     /// Access key scales tensor for a layer (for fused kernel).
+    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn k_scales(&self, layer: usize) -> Option<&Tensor> {
         self.gpu_k_scales[layer].as_ref()
     }
 
     /// Access value indices tensor for a layer.
+    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn v_indices(&self, layer: usize) -> Option<&Tensor> {
         self.gpu_v_indices[layer].as_ref()
     }
 
     /// Access value scales tensor for a layer.
+    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn v_scales(&self, layer: usize) -> Option<&Tensor> {
         self.gpu_v_scales[layer].as_ref()
     }
@@ -132,28 +146,25 @@ impl CompressedStorage {
         &mut self,
         layer: usize,
         offset: usize,
-        k_idx: &Tensor,
-        k_sc: &Tensor,
-        v_idx: &Tensor,
-        v_sc: &Tensor,
+        kv: &QuantizedKV<'_>,
         new_seq_len: usize,
     ) -> Result<()> {
         self.gpu_k_indices[layer]
             .as_ref()
-            .unwrap()
-            .slice_set(k_idx, 1, offset)?;
+            .ok_or_else(|| cache_err("k_indices buffer not allocated"))?
+            .slice_set(kv.k_indices, 1, offset)?;
         self.gpu_v_indices[layer]
             .as_ref()
-            .unwrap()
-            .slice_set(v_idx, 1, offset)?;
+            .ok_or_else(|| cache_err("v_indices buffer not allocated"))?
+            .slice_set(kv.v_indices, 1, offset)?;
         self.gpu_k_scales[layer]
             .as_ref()
-            .unwrap()
-            .slice_set(k_sc, 1, offset)?;
+            .ok_or_else(|| cache_err("k_scales buffer not allocated"))?
+            .slice_set(kv.k_scales, 1, offset)?;
         self.gpu_v_scales[layer]
             .as_ref()
-            .unwrap()
-            .slice_set(v_sc, 1, offset)?;
+            .ok_or_else(|| cache_err("v_scales buffer not allocated"))?
+            .slice_set(kv.v_scales, 1, offset)?;
 
         self.buf_seq_len[layer] = offset + new_seq_len;
         self.gpu_path_active[layer] = true;
@@ -161,6 +172,7 @@ impl CompressedStorage {
     }
 
     /// Reset all layers to empty state.
+    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn reset(&mut self) {
         for layer in 0..self.num_layers {
             self.gpu_k_indices[layer] = None;

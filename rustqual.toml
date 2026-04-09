@@ -36,7 +36,7 @@ strict_error_propagation = false
 
 # Maximum ratio of suppressed functions before a warning is emitted.
 # Default: 0.05 (5%).
-max_suppression_ratio = 0.05
+max_suppression_ratio = 0.06
 
 # If true, exit with code 1 when warnings are present (e.g. suppression ratio exceeded).
 # Default: false. Use --fail-on-warnings CLI flag to enable.

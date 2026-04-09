@@ -107,41 +107,17 @@ const SIGN_PACK_BITS: usize = BITS_PER_BYTE;
 /// A TurboQuant block with QJL bias correction.
 ///
 /// Stores (b-1)-bit PolarQuant result + 1-bit QJL signs + residual norm.
-/// The PolarQuant bit width is derived from `polar_block.bits()`.
+/// The PolarQuant bit width is derived from `polar_block.bits`.
 pub struct QjlBlock {
     /// The (b-1)-bit PolarQuant quantized block.
-    pub(crate) polar_block: PackedBlock,
+    pub polar_block: PackedBlock,
     /// 1-bit QJL signs: sign(R * residual), packed as bits.
-    pub(crate) qjl_signs: Vec<u8>,
+    pub qjl_signs: Vec<u8>,
     /// L2 norm of the residual vector.
-    pub(crate) residual_norm: f16,
+    pub residual_norm: f16,
 }
 
 impl QjlBlock {
-    /// Returns a reference to the inner PolarQuant packed block.
-    ///
-    /// Pure Operation: field access only.
-    // qual:api — used by GPU kernel integration for bulk data export
-    pub fn polar_block(&self) -> &PackedBlock {
-        &self.polar_block
-    }
-
-    /// Returns a reference to the packed QJL sign bits.
-    ///
-    /// Pure Operation: field access only.
-    // qual:api — used by GPU kernel integration for bulk data export
-    pub fn qjl_signs(&self) -> &[u8] {
-        &self.qjl_signs
-    }
-
-    /// Returns the residual L2-norm stored as f16.
-    ///
-    /// Pure Operation: field access only.
-    // qual:api — used by GPU kernel integration for bulk data export
-    pub fn residual_norm(&self) -> f16 {
-        self.residual_norm
-    }
-
     /// Creates a `QjlBlock` from pre-computed components without re-quantizing.
     ///
     /// Use this to reconstruct blocks from GPU-quantized data.
@@ -557,7 +533,7 @@ pub fn estimate_inner_product(
     qjl_block: &QjlBlock,
     config: &TurboQuantConfig,
 ) -> Result<f32> {
-    let polar_config = TurboQuantConfig::new(qjl_block.polar_block.bits(), config.dim)?
+    let polar_config = TurboQuantConfig::new(qjl_block.polar_block.bits, config.dim)?
         .with_seed(config.rotation_seed);
     let reconstructed = dequantize_vec(&polar_config, &qjl_block.polar_block)?;
     let base = dot_product(query, &reconstructed);
@@ -1154,10 +1130,10 @@ mod tests {
         let block = quantize_with_qjl(&config, &data, BIT_BUDGET_QJL_SEED).unwrap();
 
         assert_eq!(
-            block.polar_block.bits(),
+            block.polar_block.bits,
             TQ3_EXPECTED_POLAR_BITS,
             "TQ3 should use {TQ3_EXPECTED_POLAR_BITS}-bit PolarQuant, got {}",
-            block.polar_block.bits()
+            block.polar_block.bits
         );
     }
 
@@ -1170,10 +1146,10 @@ mod tests {
         let block = quantize_with_qjl(&config, &data, BIT_BUDGET_QJL_SEED).unwrap();
 
         assert_eq!(
-            block.polar_block.bits(),
+            block.polar_block.bits,
             TQ4_EXPECTED_POLAR_BITS,
             "TQ4 should use {TQ4_EXPECTED_POLAR_BITS}-bit PolarQuant, got {}",
-            block.polar_block.bits()
+            block.polar_block.bits
         );
     }
 
@@ -1463,28 +1439,28 @@ mod tests {
 
         let reconstructed = QjlBlock::from_parts(
             PackedBlock::from_raw(
-                original.polar_block().bits(),
-                original.polar_block().scale(),
-                original.polar_block().packed_indices().to_vec(),
+                original.polar_block.bits,
+                original.polar_block.scale,
+                original.polar_block.packed_indices.to_vec(),
             ),
-            original.qjl_signs().to_vec(),
-            original.residual_norm(),
+            original.qjl_signs.to_vec(),
+            original.residual_norm,
         );
 
         assert_eq!(
-            reconstructed.polar_block().bits(),
-            original.polar_block().bits()
+            reconstructed.polar_block.bits,
+            original.polar_block.bits
         );
         assert_eq!(
-            reconstructed.polar_block().scale(),
-            original.polar_block().scale()
+            reconstructed.polar_block.scale,
+            original.polar_block.scale
         );
         assert_eq!(
-            reconstructed.polar_block().packed_indices(),
-            original.polar_block().packed_indices()
+            reconstructed.polar_block.packed_indices,
+            original.polar_block.packed_indices
         );
-        assert_eq!(reconstructed.qjl_signs(), original.qjl_signs());
-        assert_eq!(reconstructed.residual_norm(), original.residual_norm());
+        assert_eq!(reconstructed.qjl_signs, original.qjl_signs);
+        assert_eq!(reconstructed.residual_norm, original.residual_norm);
     }
 
     #[test]
@@ -1496,14 +1472,14 @@ mod tests {
         let block = quantize_with_qjl(&config, &data, TEST_QJL_SEED).unwrap();
 
         // polar_block bits should be total_bits - 1
-        assert_eq!(block.polar_block().bits(), BITS_3 - 1);
+        assert_eq!(block.polar_block.bits, BITS_3 - 1);
         // scale should be positive (L2 norm of non-zero vector)
-        assert!(block.polar_block().scale().to_f32() > 0.0);
+        assert!(block.polar_block.scale.to_f32() > 0.0);
         // packed_indices should be non-empty
-        assert!(!block.polar_block().packed_indices().is_empty());
+        assert!(!block.polar_block.packed_indices.is_empty());
         // qjl_signs should have ceil(dim/8) bytes
         const BITS_PER_BYTE: usize = 8;
         let expected_sign_bytes = TEST_DIM.div_ceil(BITS_PER_BYTE);
-        assert_eq!(block.qjl_signs().len(), expected_sign_bytes);
+        assert_eq!(block.qjl_signs.len(), expected_sign_bytes);
     }
 }
