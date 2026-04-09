@@ -43,6 +43,11 @@ impl GpuPrecomputed {
     /// This is an integration function: it orchestrates Hadamard matrix
     /// construction, codebook setup, and sign pattern generation.
     pub fn new(config: &CacheConfig, device: &Device) -> Result<Self> {
+        if config.bits < 3 || config.bits > 4 {
+            return Err(super::cache_err(format!(
+                "unsupported bits={}, expected 3 or 4", config.bits
+            )));
+        }
         let block_dim = QUANT_BLOCK_SIZE;
         let polar_bits = config.bits - 1;
         let head_dim = config.head_dim;

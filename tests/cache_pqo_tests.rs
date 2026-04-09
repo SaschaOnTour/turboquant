@@ -1,7 +1,7 @@
 //! Integration tests for PqoCache — the primary CompressedKVCache implementation.
 //!
-//! Tests run on CPU only (no CUDA dependency). GPU tests will follow in Phase 4c.
-//! Requires: `cargo nextest run --features candle`
+//! CPU tests run with `cargo nextest run --features candle`.
+//! GPU tests (behind `#[cfg(feature = "cuda")]`) require `--features cuda`.
 
 #![cfg(feature = "candle")]
 

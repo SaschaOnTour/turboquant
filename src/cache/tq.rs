@@ -359,12 +359,13 @@ fn unpack_qjl_signs(
         .squeeze(0)?
         .to_dtype(DType::F32)?;
 
-    // Unpack U8 signs to ±1.0 float
+    // Unpack U8 signs to ±1.0 float: extract each bit via floor(byte/mask) mod 2.
+    // Work in F32 since candle U32 lacks scalar arithmetic and modulo.
     let signs_u8 = head_signs.unsqueeze(2)?;
-    let bits_set = signs_u8
-        .to_dtype(DType::U32)?
-        .broadcast_mul(&bit_masks.to_dtype(DType::U32)?)?;
-    let bit_set = bits_set.ne(0u32)?.to_dtype(DType::F32)?;
+    let bytes_f = signs_u8.to_dtype(DType::F32)?;
+    let masks_f = bit_masks.to_dtype(DType::F32)?;
+    let divided = bytes_f.broadcast_div(&masks_f)?.floor()?;
+    let bit_set = ((&divided / 2.0)?.floor()? * 2.0 - &divided)?.abs()?;
     let signs_float = ((bit_set * 2.0)? - 1.0)?.reshape((total_seq, head_dim))?;
     let signs_float_t = signs_float.t()?; // [dim, kv_len]
 
@@ -392,12 +393,14 @@ fn compute_qjl_signs_and_norms(
         .squeeze(1)?
         .to_dtype(DType::F16)?;
 
-    // Signs computed on CPU (hash-based, not GPU-parallelizable)
+    // Signs computed on CPU (hash-based, not GPU-parallelizable).
+    // Extract all residual data at once to avoid per-vector narrow+to_vec1 overhead.
     let residual_cpu = residual.to_device(&Device::Cpu)?;
+    let all_residual: Vec<f32> = residual_cpu.flatten_all()?.to_vec1()?;
     let mut all_signs = vec![0u8; n_vecs * signs_per_head];
     for vec_idx in 0..n_vecs {
-        let row_data: Vec<f32> = residual_cpu.narrow(0, vec_idx, 1)?.squeeze(0)?.to_vec1()?;
-        let signs = crate::compute_qjl_signs(&row_data, head_dim, DEFAULT_QJL_SEED);
+        let row_data = &all_residual[vec_idx * head_dim..(vec_idx + 1) * head_dim];
+        let signs = crate::compute_qjl_signs(row_data, head_dim, DEFAULT_QJL_SEED);
         let start = vec_idx * signs_per_head;
         all_signs[start..start + signs_per_head].copy_from_slice(&signs);
     }
