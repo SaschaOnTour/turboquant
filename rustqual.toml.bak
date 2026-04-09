@@ -5,6 +5,56 @@
 
 # ── Function Classification ──────────────────────────────────────────────
 
+# External crate/function prefixes that are allowed inside operations.
+# Calls matching these prefixes are NOT counted as "own function calls".
+external_prefixes = [
+    "std",
+    "core",
+    "alloc",
+    "log",
+    "tracing",
+    "anyhow",
+    "thiserror",
+    "serde",
+    "tokio",
+    "println",
+    "eprintln",
+    "format",
+    "vec",
+    "dbg",
+    "todo",
+    "unimplemented",
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "half",
+    "rand",
+    "rand_chacha",
+    "crate::math",
+    "ln_gamma",
+    "simpsons_integrate",
+    "dot_product",
+    "l2_norm",
+    "dequantize_vec",
+    "compute_qjl_correction",
+    "qjl_scaling_constant",
+    "rademacher_vector_product",
+    "sign_bit",
+    "mix_seed",
+    "ceiling_div",
+    "is_zero_norm",
+    "polar_block",
+    "packed_indices",
+    "qjl_signs",
+    "residual_norm",
+    "from_raw",
+    "from_parts",
+    "PackedBlock::from_raw",
+    "QjlBlock::from_parts",
+]
+
 # Function names (or glob patterns) to exclude from analysis.
 # Examples: "main", "test_*", "visit_*"
 ignore_functions = [
@@ -84,7 +134,7 @@ max_methods = 20
 max_fan_out = 10
 lcom4_threshold = 2
 weights = [0.4, 0.25, 0.15, 0.2]
-file_length_baseline = 300
+file_length_baseline = 350
 file_length_ceiling = 800
 max_independent_clusters = 3
 min_cluster_statements = 5

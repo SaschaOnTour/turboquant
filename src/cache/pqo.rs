@@ -44,6 +44,10 @@ impl PqoCache {
     ///
     /// - `outlier_blocks = 0`: PQ (plain PolarQuant, standard codebook only)
     /// - `outlier_blocks = usize::MAX`: PQO (all blocks use outlier codebook)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `head_dim` is not divisible by `QUANT_BLOCK_SIZE` (32).
     pub fn with_outlier_blocks(
         bits: u8,
         head_dim: usize,
@@ -52,6 +56,11 @@ impl PqoCache {
         norm_mode: QuantNormMode,
         outlier_blocks: usize,
     ) -> Self {
+        assert!(
+            head_dim % QUANT_BLOCK_SIZE == 0,
+            "head_dim ({head_dim}) must be divisible by QUANT_BLOCK_SIZE ({QUANT_BLOCK_SIZE}). \
+             Models with head_dim={head_dim} are not supported by TurboQuant compression."
+        );
         Self {
             bits,
             head_dim,

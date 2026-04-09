@@ -29,6 +29,9 @@ pub struct TqCache {
 
 impl TqCache {
     /// Create a new TQ cache.
+    /// # Panics
+    ///
+    /// Panics if `head_dim` is not divisible by `QUANT_BLOCK_SIZE` (32).
     pub fn new(
         bits: u8,
         head_dim: usize,
@@ -36,6 +39,11 @@ impl TqCache {
         num_layers: usize,
         norm_mode: QuantNormMode,
     ) -> Self {
+        assert!(
+            head_dim % QUANT_BLOCK_SIZE == 0,
+            "head_dim ({head_dim}) must be divisible by QUANT_BLOCK_SIZE ({QUANT_BLOCK_SIZE}). \
+             Models with head_dim={head_dim} are not supported by TurboQuant compression."
+        );
         Self {
             bits,
             head_dim,
