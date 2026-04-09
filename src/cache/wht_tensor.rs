@@ -18,7 +18,11 @@ pub fn butterfly_wht_inverse_cpu(
     block_size: usize,
 ) -> Result<Tensor> {
     let (m, bs) = dequant.dims2()?;
-    debug_assert_eq!(bs, block_size);
+    if bs != block_size {
+        candle_core::bail!(
+            "butterfly_wht_inverse_cpu: block_size mismatch (tensor={bs}, expected={block_size})"
+        );
+    }
 
     // Extract sign pattern: rotation_fwd[0][j] = signs[j] / sqrt(N)
     let sqrt_n = (block_size as f32).sqrt();
