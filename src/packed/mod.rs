@@ -136,7 +136,6 @@ impl TurboQuantConfig {
         self.rotation_seed = seed;
         self
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -179,12 +178,10 @@ impl PackedBlock {
         }
     }
 
-
     /// Total size of the block in bytes (2 bytes for f16 scale + packed data).
     pub fn size_bytes(&self) -> usize {
         SCALE_SIZE_BYTES + self.packed_indices.len()
     }
-
 
     /// Creates a `PackedBlock` from pre-packed data without re-packing.
     ///
@@ -716,11 +713,8 @@ mod tests {
             .map(|i| (i % TEST_3BIT_LEVELS) as u8)
             .collect();
         let original = PackedBlock::new(BITS_TQ3, f16::from_f32(TEST_SCALE_HALF), &indices);
-        let reconstructed = PackedBlock::from_raw(
-            BITS_TQ3,
-            original.scale,
-            original.packed_indices.to_vec(),
-        );
+        let reconstructed =
+            PackedBlock::from_raw(BITS_TQ3, original.scale, original.packed_indices.to_vec());
         assert_eq!(reconstructed.unpack(TEST_DIM_128), indices);
     }
 }

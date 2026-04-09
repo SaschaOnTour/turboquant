@@ -1130,8 +1130,7 @@ mod tests {
         let block = quantize_with_qjl(&config, &data, BIT_BUDGET_QJL_SEED).unwrap();
 
         assert_eq!(
-            block.polar_block.bits,
-            TQ3_EXPECTED_POLAR_BITS,
+            block.polar_block.bits, TQ3_EXPECTED_POLAR_BITS,
             "TQ3 should use {TQ3_EXPECTED_POLAR_BITS}-bit PolarQuant, got {}",
             block.polar_block.bits
         );
@@ -1146,8 +1145,7 @@ mod tests {
         let block = quantize_with_qjl(&config, &data, BIT_BUDGET_QJL_SEED).unwrap();
 
         assert_eq!(
-            block.polar_block.bits,
-            TQ4_EXPECTED_POLAR_BITS,
+            block.polar_block.bits, TQ4_EXPECTED_POLAR_BITS,
             "TQ4 should use {TQ4_EXPECTED_POLAR_BITS}-bit PolarQuant, got {}",
             block.polar_block.bits
         );
@@ -1447,14 +1445,8 @@ mod tests {
             original.residual_norm,
         );
 
-        assert_eq!(
-            reconstructed.polar_block.bits,
-            original.polar_block.bits
-        );
-        assert_eq!(
-            reconstructed.polar_block.scale,
-            original.polar_block.scale
-        );
+        assert_eq!(reconstructed.polar_block.bits, original.polar_block.bits);
+        assert_eq!(reconstructed.polar_block.scale, original.polar_block.scale);
         assert_eq!(
             reconstructed.polar_block.packed_indices,
             original.polar_block.packed_indices
