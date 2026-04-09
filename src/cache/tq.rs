@@ -311,10 +311,23 @@ impl CompressedKVCache for TqCache {
     }
     fn reset(&mut self) -> Result<()> {
         self.storage.reset();
+        for signs in &mut self.qjl_signs {
+            *signs = None;
+        }
+        for norms in &mut self.qjl_norms {
+            *norms = None;
+        }
         Ok(())
     }
     fn memory_usage(&self) -> usize {
-        self.storage.memory_usage()
+        let qjl_bytes: usize = self
+            .qjl_signs
+            .iter()
+            .chain(self.qjl_norms.iter())
+            .filter_map(|t| t.as_ref())
+            .map(|t| t.elem_count() * t.dtype().size_in_bytes())
+            .sum();
+        self.storage.memory_usage() + qjl_bytes
     }
 }
 

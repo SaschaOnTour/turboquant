@@ -299,6 +299,7 @@ const QJL_SIGN_BITS: u8 = 1;
 ///
 /// Integration: calls `rademacher_vector_product` and `pack_sign_bits`.
 pub fn compute_qjl_signs(residual: &[f32], dim: usize, seed: u64) -> Vec<u8> {
+    assert_eq!(residual.len(), dim, "residual length must match dim");
     let sign_bools: Vec<bool> = (0..dim)
         .map(|j| {
             let projection = rademacher_vector_product(residual, dim, seed, j);

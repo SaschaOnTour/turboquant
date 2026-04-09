@@ -1,8 +1,8 @@
 //! Compressed KV-cache implementations for LLM inference.
 //!
-//! This module provides [`PqoCache`] (PolarQuant Outlier) as the primary
-//! cache implementation, with [`TqCache`] (TurboQuant with QJL correction)
-//! and [`PqCache`] (plain PolarQuant) as alternatives.
+//! This module provides [`PqoCache`] (PolarQuant, covering both PQ and PQO
+//! modes via `CacheConfig::outlier_blocks`) and [`TqCache`] (TurboQuant with
+//! QJL correction).
 //!
 //! All implementations use the [`CompressedKVCache`] trait from
 //! `mistralrs-kv-cache`, making them drop-in replacements for any

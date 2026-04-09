@@ -215,8 +215,8 @@ pub fn unpack_indices_2bit(packed: &[u8], count: usize) -> Vec<u8> {
 
 /// Pack a full vector of 3-bit indices into a compact byte vector.
 ///
-/// The input length must be a multiple of 8. Each group of 8 indices produces 3
-/// bytes.
+/// Each group of 8 indices produces 3 bytes. Remainder indices are zero-padded
+/// internally.
 ///
 /// Pure Integration: delegates to `pack_indices_chunked`.
 pub fn pack_indices_3bit(indices: &[u8]) -> Vec<u8> {
