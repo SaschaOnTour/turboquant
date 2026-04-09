@@ -5,8 +5,8 @@
 //! [`Codebook`] struct, static lookup tables, and the Beta PDF) to respect
 //! the Single Responsibility Principle.
 
-use super::{beta_pdf, centroid_count, Codebook, SUPPORT_MAX, SUPPORT_MIN};
-use crate::math::{converge, simpsons_integrate, HALF};
+use super::{centroid_count, Codebook, SUPPORT_MAX, SUPPORT_MIN};
+use crate::math::{converge, ln_gamma, simpsons_integrate, HALF};
 
 // ---------------------------------------------------------------------------
 // Constants — generation-specific
@@ -24,6 +24,47 @@ const INTEGRATION_STEPS: usize = 1024;
 
 /// Small epsilon to guard against division by near-zero values.
 const EPSILON_ZERO: f64 = 1e-30;
+
+/// Minimum dimension for which the Beta-type PDF is well-defined.
+/// For d < 3 the exponent (d-3)/2 is negative and the distribution degenerates.
+const MIN_DIMENSION_FOR_PDF: usize = 3;
+
+/// The exponent offset in the Beta-type kernel: (d - 3) / 2.
+const KERNEL_EXPONENT_OFFSET: f64 = 3.0;
+
+// ---------------------------------------------------------------------------
+// Pure Operation: Beta PDF
+// ---------------------------------------------------------------------------
+
+/// Evaluate the Beta-type PDF of a rotated unit-vector coordinate.
+///
+/// ```text
+/// f_X(x) = Gamma(d/2) / (sqrt(pi) * Gamma((d-1)/2)) * (1 - x^2)^((d-3)/2)
+/// ```
+///
+/// Pure Operation: all arithmetic (kernel + normalization) is computed
+/// inline without calls to other project functions.
+pub fn beta_pdf(x: f64, d: usize) -> f64 {
+    // Guard: dimension too low.
+    if d < MIN_DIMENSION_FOR_PDF {
+        return 0.0;
+    }
+    let df = d as f64;
+    let exponent = (df - KERNEL_EXPONENT_OFFSET) * HALF;
+    let one_minus_x2 = 1.0 - x * x;
+    if one_minus_x2 <= 0.0 {
+        return 0.0;
+    }
+    let kernel = one_minus_x2.powf(exponent);
+
+    // Normalization: ln(Gamma(d/2)) - 0.5*ln(pi) - ln(Gamma((d-1)/2))
+    let half_df = df * HALF;
+    let half_df_minus_one = (df - 1.0) * HALF;
+    let half_ln_pi = HALF * core::f64::consts::PI.ln();
+    let log_norm = ln_gamma(half_df) - half_ln_pi - ln_gamma(half_df_minus_one);
+
+    log_norm.exp() * kernel
+}
 
 // ---------------------------------------------------------------------------
 // Pure Operation: initialization

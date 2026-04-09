@@ -12,17 +12,20 @@ pub mod qjl;
 pub mod quantize;
 pub mod rotation;
 
+#[cfg(feature = "candle")]
+pub mod cache;
+
 #[cfg(test)]
 mod test_utils;
 
-pub use attention::QuantizedKVCache;
+pub use attention::{PackedImport, QuantizedKVCache};
 pub use error::{Result, TurboQuantError};
 pub use packed::PackedBlock;
 pub use packed::TurboQuantConfig;
 pub use qjl::{
-    estimate_inner_product, estimate_inner_product_single, estimate_inner_product_with_codebook,
-    precompute_query_projections, quantize_with_qjl, quantize_with_qjl_resources,
-    EstimationContext, QjlBatchResources, QjlBlock,
+    compute_qjl_signs, estimate_inner_product, estimate_inner_product_single,
+    estimate_inner_product_with_codebook, precompute_query_projections, quantize_with_qjl,
+    quantize_with_qjl_resources, EstimationContext, QjlBatchResources, QjlBlock,
 };
 pub use quantize::{
     dequantize_into_with_codebook, dequantize_vec, dequantize_vec_with_codebook, quantize_vec,

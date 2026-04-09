@@ -466,7 +466,7 @@ mod packed_tests {
         let block = PackedBlock::new(3, scale, &indices);
         let recovered = block.unpack(64);
         assert_eq!(indices, recovered);
-        assert_eq!(block.scale(), scale);
+        assert_eq!(block.scale, scale);
     }
 
     #[test]
@@ -476,7 +476,7 @@ mod packed_tests {
         let block = PackedBlock::new(4, scale, &indices);
         let recovered = block.unpack(64);
         assert_eq!(indices, recovered);
-        assert_eq!(block.scale(), scale);
+        assert_eq!(block.scale, scale);
     }
 
     // ----- 2-bit roundtrip ---------------------------------------------------
@@ -524,7 +524,7 @@ mod packed_tests {
         let block = PackedBlock::new(2, scale, &indices);
         let recovered = block.unpack(64);
         assert_eq!(indices, recovered);
-        assert_eq!(block.scale(), scale);
+        assert_eq!(block.scale, scale);
     }
 
     #[test]
@@ -846,7 +846,7 @@ mod quantize_tests {
         let config = TurboQuantConfig::new(2, 64).unwrap().with_seed(TEST_SEED);
         let data = pseudo_random_vec(64, 44444);
         let block = quantize_vec(&config, &data).unwrap();
-        assert_eq!(block.bits(), 2);
+        assert_eq!(block.bits, 2);
         let recovered = dequantize_vec(&config, &block).unwrap();
         assert_eq!(recovered.len(), 64);
     }
@@ -856,7 +856,7 @@ mod quantize_tests {
         let config = TurboQuantConfig::new(3, 64).unwrap().with_seed(TEST_SEED);
         let data = pseudo_random_vec(64, 55555);
         let block = quantize_vec(&config, &data).unwrap();
-        assert_eq!(block.bits(), 3);
+        assert_eq!(block.bits, 3);
         let recovered = dequantize_vec(&config, &block).unwrap();
         assert_eq!(recovered.len(), 64);
     }
@@ -866,7 +866,7 @@ mod quantize_tests {
         let config = TurboQuantConfig::new(4, 64).unwrap().with_seed(TEST_SEED);
         let data = pseudo_random_vec(64, 66666);
         let block = quantize_vec(&config, &data).unwrap();
-        assert_eq!(block.bits(), 4);
+        assert_eq!(block.bits, 4);
         let recovered = dequantize_vec(&config, &block).unwrap();
         assert_eq!(recovered.len(), 64);
     }

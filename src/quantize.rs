@@ -233,7 +233,7 @@ pub fn dequantize_vec_with_codebook(
 
     rotate(&mut reconstructed, sign_pattern, RotationOrder::Inverse)?;
 
-    let scale = block.scale().to_f32();
+    let scale = block.scale.to_f32();
     scale_inplace(&mut reconstructed, scale);
 
     Ok(reconstructed)
@@ -262,7 +262,7 @@ pub fn dequantize_into_with_codebook(
     block.unpack_into(config.dim, &mut scratch.indices);
     lookup_centroids_into(&scratch.indices, codebook, &mut scratch.values);
     rotate(&mut scratch.values, sign_pattern, RotationOrder::Inverse)?;
-    scale_inplace(&mut scratch.values, block.scale().to_f32());
+    scale_inplace(&mut scratch.values, block.scale.to_f32());
     Ok(())
 }
 
@@ -309,7 +309,7 @@ pub fn dequantize_rotated(config: &TurboQuantConfig, block: &PackedBlock) -> Res
     let indices = block.unpack(config.dim);
     let mut reconstructed = lookup_centroids(&indices, &codebook);
 
-    let scale = block.scale().to_f32();
+    let scale = block.scale.to_f32();
     scale_inplace(&mut reconstructed, scale);
 
     Ok(reconstructed)
@@ -457,14 +457,14 @@ mod tests {
     fn packed_block_tq3() {
         let indices = vec![0u8; TEST_DIM];
         let block = PackedBlock::new(BITS_TQ3, f16::from_f32(1.0), &indices);
-        assert_eq!(block.bits(), BITS_TQ3);
+        assert_eq!(block.bits, BITS_TQ3);
     }
 
     #[test]
     fn packed_block_tq4() {
         let indices = vec![0u8; TEST_DIM];
         let block = PackedBlock::new(BITS_TQ4, f16::from_f32(1.0), &indices);
-        assert_eq!(block.bits(), BITS_TQ4);
+        assert_eq!(block.bits, BITS_TQ4);
     }
 
     // -- quantize rejects dimension mismatch ----------------------------------
@@ -597,7 +597,7 @@ mod tests {
             f16::from_f32(TEST_CONST_VAL_A),
             &[0u8; TEST_SMALL_DIM],
         );
-        assert!((block.scale().to_f32() - TEST_CONST_VAL_A).abs() < 0.01);
+        assert!((block.scale.to_f32() - TEST_CONST_VAL_A).abs() < 0.01);
     }
 
     #[test]
@@ -607,7 +607,7 @@ mod tests {
             f16::from_f32(TEST_CONST_VAL_B),
             &[0u8; TEST_SMALL_DIM],
         );
-        assert!((block.scale().to_f32() - TEST_CONST_VAL_B).abs() < 0.01);
+        assert!((block.scale.to_f32() - TEST_CONST_VAL_B).abs() < 0.01);
     }
 
     // -- PackedBlock::size_bytes ----------------------------------------------
