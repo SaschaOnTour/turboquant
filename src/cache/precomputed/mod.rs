@@ -51,12 +51,15 @@ impl GpuPrecomputed {
         }
         #[cfg(feature = "cuda")]
         {
-            /// Maximum head dimension supported by CUDA kernels (shared memory limit).
-            const CUDA_MAX_HEAD_DIM: usize = 1024;
-            if device.is_cuda() && config.head_dim > CUDA_MAX_HEAD_DIM {
+            /// Maximum head dimension supported by the current CUDA kernel launch
+            /// configuration. The kernels launch with `head_dim` threads per block,
+            /// so this is bounded by the device's max threads-per-block limit.
+            const CUDA_MAX_THREADS_PER_BLOCK: usize = 1024;
+            if device.is_cuda() && config.head_dim > CUDA_MAX_THREADS_PER_BLOCK {
                 return Err(super::cache_err(format!(
-                    "head_dim {} exceeds CUDA_MAX_HEAD_DIM ({CUDA_MAX_HEAD_DIM}). \
-                     CUDA shared memory buffer overflow would occur.",
+                    "head_dim {} exceeds the CUDA kernel thread-block limit \
+                     ({CUDA_MAX_THREADS_PER_BLOCK}); launching a kernel with \
+                     head_dim threads per block would exceed the device maximum.",
                     config.head_dim
                 )));
             }
