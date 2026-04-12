@@ -27,28 +27,27 @@ pub struct PqoCache {
 impl PqoCache {
     /// Create a new PQO/PQ/TQ cache from configuration.
     ///
-    /// # Panics
-    ///
-    /// Panics if `head_dim` is not divisible by `QUANT_BLOCK_SIZE` (32).
-    pub fn new(config: CacheConfig) -> Self {
-        assert!(
-            config.head_dim % QUANT_BLOCK_SIZE == 0,
-            "head_dim ({}) must be divisible by QUANT_BLOCK_SIZE ({QUANT_BLOCK_SIZE}). \
-             Models with head_dim={} are not supported by TurboQuant compression.",
-            config.head_dim,
-            config.head_dim
-        );
+    /// Returns an error if `head_dim` is not divisible by `QUANT_BLOCK_SIZE` (32).
+    pub fn new(config: CacheConfig) -> candle_core::Result<Self> {
+        if config.head_dim % QUANT_BLOCK_SIZE != 0 {
+            candle_core::bail!(
+                "head_dim ({}) must be divisible by QUANT_BLOCK_SIZE ({QUANT_BLOCK_SIZE}). \
+                 Models with head_dim={} are not supported by TurboQuant compression.",
+                config.head_dim,
+                config.head_dim
+            );
+        }
         let storage = CompressedStorage::new(
             config.num_kv_heads,
             config.head_dim,
             config.bits,
             config.num_layers,
         );
-        Self {
+        Ok(Self {
             config,
             storage,
             precomputed: None,
-        }
+        })
     }
 
     /// Ensure precomputed tensors are initialized on the given device.

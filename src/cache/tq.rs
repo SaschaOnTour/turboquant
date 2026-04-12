@@ -29,17 +29,17 @@ pub struct TqCache {
 
 impl TqCache {
     /// Create a new TQ cache.
-    /// # Panics
     ///
-    /// Panics if `head_dim` is not divisible by `QUANT_BLOCK_SIZE` (32).
-    pub fn new(config: CacheConfig) -> Self {
-        assert!(
-            config.head_dim % QUANT_BLOCK_SIZE == 0,
-            "head_dim ({}) must be divisible by QUANT_BLOCK_SIZE ({QUANT_BLOCK_SIZE}). \
-             Models with head_dim={} are not supported by TurboQuant compression.",
-            config.head_dim,
-            config.head_dim
-        );
+    /// Returns an error if `head_dim` is not divisible by `QUANT_BLOCK_SIZE` (32).
+    pub fn new(config: CacheConfig) -> candle_core::Result<Self> {
+        if config.head_dim % QUANT_BLOCK_SIZE != 0 {
+            candle_core::bail!(
+                "head_dim ({}) must be divisible by QUANT_BLOCK_SIZE ({QUANT_BLOCK_SIZE}). \
+                 Models with head_dim={} are not supported by TurboQuant compression.",
+                config.head_dim,
+                config.head_dim
+            );
+        }
         let storage = CompressedStorage::new(
             config.num_kv_heads,
             config.head_dim,
@@ -47,13 +47,13 @@ impl TqCache {
             config.num_layers,
         );
         let num_layers = config.num_layers;
-        Self {
+        Ok(Self {
             config,
             storage,
             precomputed: None,
             qjl_signs: vec![None; num_layers],
             qjl_norms: vec![None; num_layers],
-        }
+        })
     }
 
     fn ensure_precomputed(&mut self, device: &Device) -> Result<()> {
@@ -400,7 +400,8 @@ fn compute_qjl_signs_and_norms(
     let mut all_signs = vec![0u8; n_vecs * signs_per_head];
     for vec_idx in 0..n_vecs {
         let row_data = &all_residual[vec_idx * head_dim..(vec_idx + 1) * head_dim];
-        let signs = crate::compute_qjl_signs(row_data, head_dim, DEFAULT_QJL_SEED);
+        let signs = crate::compute_qjl_signs(row_data, head_dim, DEFAULT_QJL_SEED)
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         let start = vec_idx * signs_per_head;
         all_signs[start..start + signs_per_head].copy_from_slice(&signs);
     }

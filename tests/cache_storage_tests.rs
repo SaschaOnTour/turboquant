@@ -124,7 +124,7 @@ fn dequantize_full_roundtrip_produces_output() {
         num_layers: NUM_LAYERS,
         norm_mode: QuantNormMode::MaxNorm,
         outlier_blocks: usize::MAX,
-    });
+    })?;
     let (k, v) = make_kv(8);
     let q = make_q(8);
 

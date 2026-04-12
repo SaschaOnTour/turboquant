@@ -298,15 +298,20 @@ const QJL_SIGN_BITS: u8 = 1;
 /// the results as a bit vector (8 signs per byte).
 ///
 /// Integration: calls `rademacher_vector_product` and `pack_sign_bits`.
-pub fn compute_qjl_signs(residual: &[f32], dim: usize, seed: u64) -> Vec<u8> {
-    assert_eq!(residual.len(), dim, "residual length must match dim");
+pub fn compute_qjl_signs(residual: &[f32], dim: usize, seed: u64) -> crate::error::Result<Vec<u8>> {
+    if residual.len() != dim {
+        return Err(crate::error::TurboQuantError::DimensionMismatch {
+            expected: dim,
+            actual: residual.len(),
+        });
+    }
     let sign_bools: Vec<bool> = (0..dim)
         .map(|j| {
             let projection = rademacher_vector_product(residual, dim, seed, j);
             projection >= 0.0
         })
         .collect();
-    pack_sign_bits(&sign_bools)
+    Ok(pack_sign_bits(&sign_bools))
 }
 
 // ---------------------------------------------------------------------------
@@ -358,7 +363,7 @@ pub fn quantize_with_qjl(
     let reconstructed = dequantize_vec(&polar_config, &polar_block)?;
     let residual = compute_residual(data, &reconstructed);
     let residual_norm = l2_norm(&residual);
-    let qjl_signs = compute_qjl_signs(&residual, config.dim, qjl_seed);
+    let qjl_signs = compute_qjl_signs(&residual, config.dim, qjl_seed)?;
 
     Ok(QjlBlock {
         polar_block,
@@ -447,7 +452,7 @@ pub fn quantize_with_qjl_resources(
     let residual = compute_residual(data, &res.scratch.values);
     let residual_norm = l2_norm(&residual);
     let dim = res.polar_config.dim;
-    let qjl_signs = compute_qjl_signs(&residual, dim, qjl_seed);
+    let qjl_signs = compute_qjl_signs(&residual, dim, qjl_seed)?;
 
     Ok(QjlBlock {
         polar_block,

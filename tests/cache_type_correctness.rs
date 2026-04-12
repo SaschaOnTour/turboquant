@@ -66,7 +66,7 @@ fn attend_config() -> AttendConfig {
 
 #[test]
 fn pq3_uses_standard_codebook() {
-    let mut cache = PqoCache::new(cfg(0));
+    let mut cache = PqoCache::new(cfg(0))?;
     let (k, v) = make_kv(4, 1.0);
     let q = make_q(4);
     let result = cache.prefill(LAYER, &k, &v, &q).unwrap();
@@ -79,8 +79,8 @@ fn pq3_and_pqo3_both_produce_valid_output() {
     let (k, v) = make_kv(8, 10.0);
     let q = make_q(8);
 
-    let mut pq = PqoCache::new(cfg(0));
-    let mut pqo = PqoCache::new(cfg(usize::MAX));
+    let mut pq = PqoCache::new(cfg(0))?;
+    let mut pqo = PqoCache::new(cfg(usize::MAX))?;
 
     pq.prefill(LAYER, &k, &v, &q).unwrap();
     pqo.prefill(LAYER, &k, &v, &q).unwrap();
@@ -109,7 +109,7 @@ fn pq3_and_pqo3_both_produce_valid_output() {
 
 #[test]
 fn pqo3_uses_outlier_codebook() {
-    let mut cache = PqoCache::new(cfg(usize::MAX));
+    let mut cache = PqoCache::new(cfg(usize::MAX))?;
     let (k, v) = make_kv(4, 2.0);
     let q = make_q(4);
     let result = cache.prefill(LAYER, &k, &v, &q).unwrap();
@@ -124,7 +124,7 @@ fn pqo4_uses_outlier_codebook() {
     let mut cache = PqoCache::new(CacheConfig {
         bits: 4,
         ..cfg(usize::MAX)
-    });
+    })?;
     let (k, v) = make_kv(4, 3.0);
     let q = make_q(4);
     let result = cache.prefill(LAYER, &k, &v, &q).unwrap();
@@ -199,11 +199,11 @@ fn tq4_prefill_returns_logit_bias() {
 // -----------------------------------------------------------------------
 
 fn create_tq3_cache() -> Box<dyn CompressedKVCache> {
-    Box::new(TqCache::new(cfg(0)))
+    Box::new(TqCache::new(cfg(0)).unwrap())
 }
 
 fn create_tq4_cache() -> Box<dyn CompressedKVCache> {
-    Box::new(TqCache::new(CacheConfig { bits: 4, ..cfg(0) }))
+    Box::new(TqCache::new(CacheConfig { bits: 4, ..cfg(0) }).unwrap())
 }
 
 // -----------------------------------------------------------------------
