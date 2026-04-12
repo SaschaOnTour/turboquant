@@ -87,6 +87,25 @@ float tq_sign(uint64_t seed, int index) {
 }
 
 /* -----------------------------------------------------------------------
+ * Atomic byte-OR helper.
+ *
+ * On CUDA device: uses atomicOr on the containing uint32 word.
+ * On host: plain OR (single-threaded, no atomics needed).
+ * ----------------------------------------------------------------------- */
+
+static inline __device__ __host__
+void tq_atomic_byte_or(uint8_t *packed, int byte_idx, uint32_t bits) {
+#ifdef __CUDA_ARCH__
+    if (bits) {
+        atomicOr((unsigned int *)(packed + (byte_idx & ~3)),
+                 bits << ((byte_idx & 3) * 8));
+    }
+#else
+    packed[byte_idx] |= (uint8_t)bits;
+#endif
+}
+
+/* -----------------------------------------------------------------------
  * 2-bit packing: 4 indices per byte (for quantize kernel)
  *
  * Thread `tid` contributes its index to the correct byte position.
@@ -97,8 +116,49 @@ static inline __device__ __host__
 void tq_pack_2bit(uint8_t *packed, int tid, uint8_t idx) {
     int byte_idx = tid >> 2;
     int shift = (tid & 3) << 1;
-    /* Use atomicOr in CUDA, or sequential writes if single-threaded. */
-    packed[byte_idx] |= (idx & 0x3) << shift;
+    tq_atomic_byte_or(packed, byte_idx, (uint32_t)((idx & 0x3) << shift));
+}
+
+/* -----------------------------------------------------------------------
+ * 3-bit packing: 8 indices per 3 bytes (for quantize kernel)
+ *
+ * Matches the exact bit layout of tq_unpack_3bit above.
+ * Thread `tid` contributes its 3-bit index to the correct bit positions
+ * across up to 2 bytes. Uses tq_atomic_byte_or for thread-safe writes.
+ * ----------------------------------------------------------------------- */
+
+static inline __device__ __host__
+void tq_pack_3bit(uint8_t *packed, int tid, uint8_t idx) {
+    int group = tid >> 3;
+    int pos   = tid & 7;
+    int base  = group * 3;
+    uint32_t b0_bits = 0, b1_bits = 0, b2_bits = 0;
+    switch (pos) {
+        case 0: b0_bits = (idx & 0x7);        break;
+        case 1: b0_bits = (idx & 0x7) << 3;   break;
+        case 2: b0_bits = (idx & 0x3) << 6;
+                b1_bits = (idx >> 2)  & 0x1;   break;
+        case 3: b1_bits = (idx & 0x7) << 1;   break;
+        case 4: b1_bits = (idx & 0x7) << 4;   break;
+        case 5: b1_bits = (idx & 0x1) << 7;
+                b2_bits = (idx >> 1)  & 0x3;   break;
+        case 6: b2_bits = (idx & 0x7) << 2;   break;
+        case 7: b2_bits = (idx & 0x7) << 5;   break;
+    }
+    tq_atomic_byte_or(packed, base,     b0_bits);
+    tq_atomic_byte_or(packed, base + 1, b1_bits);
+    tq_atomic_byte_or(packed, base + 2, b2_bits);
+}
+
+/* -----------------------------------------------------------------------
+ * 4-bit packing: 2 indices per byte (for quantize kernel)
+ * ----------------------------------------------------------------------- */
+
+static inline __device__ __host__
+void tq_pack_4bit(uint8_t *packed, int tid, uint8_t idx) {
+    int byte_idx = tid >> 1;
+    int shift = (tid & 1) << 2;
+    tq_atomic_byte_or(packed, byte_idx, (uint32_t)((idx & 0xF) << shift));
 }
 
 /* -----------------------------------------------------------------------

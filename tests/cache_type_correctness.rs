@@ -65,16 +65,17 @@ fn attend_config() -> AttendConfig {
 // -----------------------------------------------------------------------
 
 #[test]
-fn pq3_uses_standard_codebook() {
+fn pq3_uses_standard_codebook() -> candle_core::Result<()> {
     let mut cache = PqoCache::new(cfg(0))?;
     let (k, v) = make_kv(4, 1.0);
     let q = make_q(4);
     let result = cache.prefill(LAYER, &k, &v, &q).unwrap();
     assert!(result.logit_bias.is_none(), "PQ3 should have no logit_bias");
+    Ok(())
 }
 
 #[test]
-fn pq3_and_pqo3_both_produce_valid_output() {
+fn pq3_and_pqo3_both_produce_valid_output() -> candle_core::Result<()> {
     // Verify both PQ3 and PQO3 produce valid decode output (correct shapes, no crash)
     let (k, v) = make_kv(8, 10.0);
     let q = make_q(8);
@@ -101,6 +102,7 @@ fn pq3_and_pqo3_both_produce_valid_output() {
         DecodeOutput::Dequantized(r) => assert_eq!(r.k.dims()[2], 9),
         DecodeOutput::Fused(t) => assert_eq!(t.dims()[2], 1),
     }
+    Ok(())
 }
 
 // -----------------------------------------------------------------------
@@ -108,7 +110,7 @@ fn pq3_and_pqo3_both_produce_valid_output() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn pqo3_uses_outlier_codebook() {
+fn pqo3_uses_outlier_codebook() -> candle_core::Result<()> {
     let mut cache = PqoCache::new(cfg(usize::MAX))?;
     let (k, v) = make_kv(4, 2.0);
     let q = make_q(4);
@@ -117,10 +119,11 @@ fn pqo3_uses_outlier_codebook() {
         result.logit_bias.is_none(),
         "PQO3 should have no logit_bias"
     );
+    Ok(())
 }
 
 #[test]
-fn pqo4_uses_outlier_codebook() {
+fn pqo4_uses_outlier_codebook() -> candle_core::Result<()> {
     let mut cache = PqoCache::new(CacheConfig {
         bits: 4,
         ..cfg(usize::MAX)
@@ -132,6 +135,7 @@ fn pqo4_uses_outlier_codebook() {
         result.logit_bias.is_none(),
         "PQO4 should have no logit_bias"
     );
+    Ok(())
 }
 
 // -----------------------------------------------------------------------
