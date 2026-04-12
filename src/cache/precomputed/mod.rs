@@ -49,12 +49,12 @@ impl GpuPrecomputed {
                 config.bits
             )));
         }
-        const CUDA_MAX_HEAD_DIM: usize = 1024;
-        if config.head_dim > CUDA_MAX_HEAD_DIM {
+        #[cfg(feature = "cuda")]
+        if device.is_cuda() && config.head_dim > 1024 {
             return Err(super::cache_err(format!(
-                "head_dim {} exceeds CUDA_MAX_HEAD_DIM ({}). \
+                "head_dim {} exceeds CUDA_MAX_HEAD_DIM (1024). \
                  CUDA shared memory buffer overflow would occur.",
-                config.head_dim, CUDA_MAX_HEAD_DIM
+                config.head_dim
             )));
         }
         let block_dim = QUANT_BLOCK_SIZE;
