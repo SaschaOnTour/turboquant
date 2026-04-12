@@ -18,6 +18,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc  # v2.9.1
 
@@ -39,7 +40,7 @@ jobs:
         run: cargo install cargo-audit --version =0.21.1 --locked && cargo audit
 
       - name: Install rustqual
-        run: cargo install rustqual --version =0.4.6 --locked
+        run: cargo install rustqual
 
       - name: Quality analysis
         run: rustqual src/ --fail-on-warnings
