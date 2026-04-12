@@ -49,6 +49,21 @@ impl GpuPrecomputed {
                 config.bits
             )));
         }
+        #[cfg(feature = "cuda")]
+        {
+            /// Maximum head dimension supported by the current CUDA kernel launch
+            /// configuration. The kernels launch with `head_dim` threads per block,
+            /// so this is bounded by the device's max threads-per-block limit.
+            const CUDA_MAX_THREADS_PER_BLOCK: usize = 1024;
+            if device.is_cuda() && config.head_dim > CUDA_MAX_THREADS_PER_BLOCK {
+                return Err(super::cache_err(format!(
+                    "head_dim {} exceeds the CUDA kernel thread-block limit \
+                     ({CUDA_MAX_THREADS_PER_BLOCK}); launching a kernel with \
+                     head_dim threads per block would exceed the device maximum.",
+                    config.head_dim
+                )));
+            }
+        }
         let block_dim = QUANT_BLOCK_SIZE;
         let polar_bits = config.bits - 1;
         let head_dim = config.head_dim;

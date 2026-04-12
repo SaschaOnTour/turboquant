@@ -135,45 +135,10 @@ __global__ void tq_quant_kernel(
     }
     __syncthreads();
 
-    /* Each thread atomically ORs its index bits into the correct byte */
-    if (bits == 2) {
-        int byte_idx = tid >> 2;
-        int shift = (tid & 3) << 1;
-        atomicOr((unsigned int *)(s_packed + (byte_idx & ~3)),
-                 (unsigned int)((idx & 0x3) << shift) << ((byte_idx & 3) * 8));
-    } else if (bits == 3) {
-        /* 3-bit packing: 8 indices per 3 bytes — use atomicOr on bytes */
-        int group = tid >> 3;
-        int pos   = tid & 7;
-        int base  = group * 3;
-        /* Each position writes to specific bit positions.
-         * We use atomicOr on uint8 via atomicOr on aligned uint32. */
-        uint32_t b0_bits = 0, b1_bits = 0, b2_bits = 0;
-        switch (pos) {
-            case 0: b0_bits = (idx & 0x7);        break;
-            case 1: b0_bits = (idx & 0x7) << 3;   break;
-            case 2: b0_bits = (idx & 0x3) << 6;
-                    b1_bits = (idx >> 2)  & 0x1;   break;
-            case 3: b1_bits = (idx & 0x7) << 1;   break;
-            case 4: b1_bits = (idx & 0x7) << 4;   break;
-            case 5: b1_bits = (idx & 0x1) << 7;
-                    b2_bits = (idx >> 1)  & 0x3;   break;
-            case 6: b2_bits = (idx & 0x7) << 2;   break;
-            case 7: b2_bits = (idx & 0x7) << 5;   break;
-        }
-        if (b0_bits) atomicOr((unsigned int *)(s_packed + (base & ~3)),
-                              b0_bits << ((base & 3) * 8));
-        if (b1_bits) atomicOr((unsigned int *)(s_packed + ((base + 1) & ~3)),
-                              b1_bits << (((base + 1) & 3) * 8));
-        if (b2_bits) atomicOr((unsigned int *)(s_packed + ((base + 2) & ~3)),
-                              b2_bits << (((base + 2) & 3) * 8));
-    } else {
-        /* 4-bit packing */
-        int byte_idx = tid >> 1;
-        int shift = (tid & 1) << 2;
-        atomicOr((unsigned int *)(s_packed + (byte_idx & ~3)),
-                 (unsigned int)((idx & 0xF) << shift) << ((byte_idx & 3) * 8));
-    }
+    /* Each thread packs its index bits via shared helpers (tq_common.h) */
+    if (bits == 2)      tq_pack_2bit(s_packed, tid, idx);
+    else if (bits == 3) tq_pack_3bit(s_packed, tid, idx);
+    else                tq_pack_4bit(s_packed, tid, idx);
     __syncthreads();
 
     /* Write packed output */
@@ -281,40 +246,9 @@ __global__ void tq_quant_maxnorm_kernel(
     }
     __syncthreads();
 
-    if (bits == 2) {
-        int byte_idx = tid >> 2;
-        int shift = (tid & 3) << 1;
-        atomicOr((unsigned int *)(s_packed + (byte_idx & ~3)),
-                 (unsigned int)((idx & 0x3) << shift) << ((byte_idx & 3) * 8));
-    } else if (bits == 3) {
-        int group = tid >> 3;
-        int pos   = tid & 7;
-        int base  = group * 3;
-        uint32_t b0_bits = 0, b1_bits = 0, b2_bits = 0;
-        switch (pos) {
-            case 0: b0_bits = (idx & 0x7);        break;
-            case 1: b0_bits = (idx & 0x7) << 3;   break;
-            case 2: b0_bits = (idx & 0x3) << 6;
-                    b1_bits = (idx >> 2)  & 0x1;   break;
-            case 3: b1_bits = (idx & 0x7) << 1;   break;
-            case 4: b1_bits = (idx & 0x7) << 4;   break;
-            case 5: b1_bits = (idx & 0x1) << 7;
-                    b2_bits = (idx >> 1)  & 0x3;   break;
-            case 6: b2_bits = (idx & 0x7) << 2;   break;
-            case 7: b2_bits = (idx & 0x7) << 5;   break;
-        }
-        if (b0_bits) atomicOr((unsigned int *)(s_packed + (base & ~3)),
-                              b0_bits << ((base & 3) * 8));
-        if (b1_bits) atomicOr((unsigned int *)(s_packed + ((base + 1) & ~3)),
-                              b1_bits << (((base + 1) & 3) * 8));
-        if (b2_bits) atomicOr((unsigned int *)(s_packed + ((base + 2) & ~3)),
-                              b2_bits << (((base + 2) & 3) * 8));
-    } else {
-        int byte_idx = tid >> 1;
-        int shift = (tid & 1) << 2;
-        atomicOr((unsigned int *)(s_packed + (byte_idx & ~3)),
-                 (unsigned int)((idx & 0xF) << shift) << ((byte_idx & 3) * 8));
-    }
+    if (bits == 2)      tq_pack_2bit(s_packed, tid, idx);
+    else if (bits == 3) tq_pack_3bit(s_packed, tid, idx);
+    else                tq_pack_4bit(s_packed, tid, idx);
     __syncthreads();
 
     if (tid < bytes_per_block) {
@@ -469,40 +403,9 @@ __global__ void tq_pack_kernel(
     }
     __syncthreads();
 
-    if (bits == 2) {
-        int byte_idx = tid >> 2;
-        int shift = (tid & 3) << 1;
-        atomicOr((unsigned int *)(s_packed + (byte_idx & ~3)),
-                 (unsigned int)((idx & 0x3) << shift) << ((byte_idx & 3) * 8));
-    } else if (bits == 3) {
-        int group = tid >> 3;
-        int pos   = tid & 7;
-        int base  = group * 3;
-        uint32_t b0_bits = 0, b1_bits = 0, b2_bits = 0;
-        switch (pos) {
-            case 0: b0_bits = (idx & 0x7);        break;
-            case 1: b0_bits = (idx & 0x7) << 3;   break;
-            case 2: b0_bits = (idx & 0x3) << 6;
-                    b1_bits = (idx >> 2)  & 0x1;   break;
-            case 3: b1_bits = (idx & 0x7) << 1;   break;
-            case 4: b1_bits = (idx & 0x7) << 4;   break;
-            case 5: b1_bits = (idx & 0x1) << 7;
-                    b2_bits = (idx >> 1)  & 0x3;   break;
-            case 6: b2_bits = (idx & 0x7) << 2;   break;
-            case 7: b2_bits = (idx & 0x7) << 5;   break;
-        }
-        if (b0_bits) atomicOr((unsigned int *)(s_packed + (base & ~3)),
-                              b0_bits << ((base & 3) * 8));
-        if (b1_bits) atomicOr((unsigned int *)(s_packed + ((base + 1) & ~3)),
-                              b1_bits << (((base + 1) & 3) * 8));
-        if (b2_bits) atomicOr((unsigned int *)(s_packed + ((base + 2) & ~3)),
-                              b2_bits << (((base + 2) & 3) * 8));
-    } else {
-        int byte_idx = tid >> 1;
-        int shift = (tid & 1) << 2;
-        atomicOr((unsigned int *)(s_packed + (byte_idx & ~3)),
-                 (unsigned int)((idx & 0xF) << shift) << ((byte_idx & 3) * 8));
-    }
+    if (bits == 2)      tq_pack_2bit(s_packed, tid, idx);
+    else if (bits == 3) tq_pack_3bit(s_packed, tid, idx);
+    else                tq_pack_4bit(s_packed, tid, idx);
     __syncthreads();
 
     if (tid < bytes_per_block) {
