@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI hardening**: All GitHub Actions pinned to immutable commit SHAs, explicit `permissions: contents: read`, `cargo audit` step added.
 - **Dependabot**: Added `.github/dependabot.yml` for Cargo and GitHub Actions weekly updates.
 - **Public API safety**: `PqoCache::new()`, `TqCache::new()`, and `compute_qjl_signs()` now return `Result` instead of panicking on invalid input.
-- **head_dim guard**: `GpuPrecomputed::new()` returns an error if `head_dim > 1024` (prevents silent CUDA shared memory overflow).
+- **head_dim guard**: `GpuPrecomputed::new()` returns an error if `head_dim > 1024` (prevents launching CUDA kernels with too many threads per block).
 - **CUDA pack helpers**: Extracted `tq_pack_2bit`, `tq_pack_3bit`, `tq_pack_4bit` into `tq_common.h` — eliminated 3x copy-pasted packing logic in `tq_quant_kernel.cu`.
 
 ## [0.2.0] - 2026-03-29
