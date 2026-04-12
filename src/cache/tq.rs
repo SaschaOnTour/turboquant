@@ -401,7 +401,7 @@ fn compute_qjl_signs_and_norms(
     for vec_idx in 0..n_vecs {
         let row_data = &all_residual[vec_idx * head_dim..(vec_idx + 1) * head_dim];
         let signs = crate::compute_qjl_signs(row_data, head_dim, DEFAULT_QJL_SEED)
-            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            .map_err(|e| super::cache_err(e))?;
         let start = vec_idx * signs_per_head;
         all_signs[start..start + signs_per_head].copy_from_slice(&signs);
     }

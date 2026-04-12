@@ -297,6 +297,10 @@ const QJL_SIGN_BITS: u8 = 1;
 /// For each projection j = 0..dim, computes sign(R_j * residual) and packs
 /// the results as a bit vector (8 signs per byte).
 ///
+/// # Errors
+///
+/// Returns [`TurboQuantError::DimensionMismatch`] if `residual.len() != dim`.
+///
 /// Integration: calls `rademacher_vector_product` and `pack_sign_bits`.
 pub fn compute_qjl_signs(residual: &[f32], dim: usize, seed: u64) -> crate::error::Result<Vec<u8>> {
     if residual.len() != dim {
