@@ -116,7 +116,7 @@ fn storage_reset_clears_all() {
 // -- dequantize_full_impl via PqoCache roundtrip ----------------------------
 
 #[test]
-fn dequantize_full_roundtrip_produces_output() {
+fn dequantize_full_roundtrip_produces_output() -> candle_core::Result<()> {
     let mut cache = PqoCache::new(CacheConfig {
         bits: BITS,
         head_dim: HEAD_DIM,
@@ -124,7 +124,7 @@ fn dequantize_full_roundtrip_produces_output() {
         num_layers: NUM_LAYERS,
         norm_mode: QuantNormMode::MaxNorm,
         outlier_blocks: usize::MAX,
-    });
+    })?;
     let (k, v) = make_kv(8);
     let q = make_q(8);
 
@@ -140,4 +140,5 @@ fn dequantize_full_roundtrip_produces_output() {
     // Full dequant returns [1, heads, total_seq, dim]
     assert_eq!(result2.k.dims()[2], 12); // 8 + 4
     assert!(result2.logit_bias.is_none());
+    Ok(())
 }

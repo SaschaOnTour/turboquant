@@ -83,8 +83,8 @@ fn cosine_sim(a: &Tensor, b: &Tensor) -> f32 {
 // -----------------------------------------------------------------------
 
 #[test]
-fn pqo3_prefill_returns_original_on_first_call() {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+fn pqo3_prefill_returns_original_on_first_call() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
     let (k, v) = make_kv(8, 1.0);
     let q = make_q(8);
 
@@ -100,22 +100,24 @@ fn pqo3_prefill_returns_original_on_first_call() {
         "First prefill should return originals, got cosine_sim={sim}"
     );
     assert!(result.logit_bias.is_none(), "PQO should have no logit_bias");
+    Ok(())
 }
 
 #[test]
-fn pqo3_prefill_updates_seq_len() {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+fn pqo3_prefill_updates_seq_len() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
     let (k, v) = make_kv(16, 2.0);
     let q = make_q(16);
 
     assert_eq!(cache.seq_len(TEST_LAYER), 0);
     cache.prefill(TEST_LAYER, &k, &v, &q).unwrap();
     assert_eq!(cache.seq_len(TEST_LAYER), 16);
+    Ok(())
 }
 
 #[test]
-fn pqo3_decode_returns_dequantized() {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+fn pqo3_decode_returns_dequantized() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
 
     // Prefill 8 tokens
     let (k_pre, v_pre) = make_kv(8, 3.0);
@@ -143,11 +145,12 @@ fn pqo3_decode_returns_dequantized() {
         DecodeOutput::Fused(_) => panic!("CPU should not use fused path"),
     }
     assert_eq!(cache.seq_len(TEST_LAYER), 9);
+    Ok(())
 }
 
 #[test]
-fn pqo3_roundtrip_quality_maxnorm() {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+fn pqo3_roundtrip_quality_maxnorm() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
 
     // Prefill 4 tokens, then decode 1 token
     let (k_pre, v_pre) = make_kv(4, 5.0);
@@ -175,11 +178,12 @@ fn pqo3_roundtrip_quality_maxnorm() {
     } else {
         panic!("Expected Dequantized on CPU");
     }
+    Ok(())
 }
 
 #[test]
-fn pqo3_roundtrip_quality_l2norm() {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::L2Norm));
+fn pqo3_roundtrip_quality_l2norm() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::L2Norm))?;
 
     let (k_pre, v_pre) = make_kv(4, 7.0);
     let q = make_q(4);
@@ -205,11 +209,12 @@ fn pqo3_roundtrip_quality_l2norm() {
     } else {
         panic!("Expected Dequantized on CPU");
     }
+    Ok(())
 }
 
 #[test]
-fn pqo4_roundtrip_quality_maxnorm() {
-    let mut cache = PqoCache::new(pqo_config(4, QuantNormMode::MaxNorm));
+fn pqo4_roundtrip_quality_maxnorm() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(4, QuantNormMode::MaxNorm))?;
 
     let (k_pre, v_pre) = make_kv(4, 9.0);
     let q = make_q(4);
@@ -235,6 +240,7 @@ fn pqo4_roundtrip_quality_maxnorm() {
     } else {
         panic!("Expected Dequantized on CPU");
     }
+    Ok(())
 }
 
 // -----------------------------------------------------------------------
@@ -242,8 +248,8 @@ fn pqo4_roundtrip_quality_maxnorm() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn pqo3_reset_clears_all_layers() {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+fn pqo3_reset_clears_all_layers() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
     let (k, v) = make_kv(4, 11.0);
     let q = make_q(4);
 
@@ -256,11 +262,12 @@ fn pqo3_reset_clears_all_layers() {
     assert_eq!(cache.seq_len(0), 0);
     assert_eq!(cache.seq_len(1), 0);
     assert_eq!(cache.memory_usage(), 0);
+    Ok(())
 }
 
 #[test]
-fn pqo3_layers_are_independent() {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+fn pqo3_layers_are_independent() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
     let (k4, v4) = make_kv(4, 12.0);
     let (k8, v8) = make_kv(8, 13.0);
     let q4 = make_q(4);
@@ -271,11 +278,12 @@ fn pqo3_layers_are_independent() {
 
     assert_eq!(cache.seq_len(0), 4);
     assert_eq!(cache.seq_len(1), 8);
+    Ok(())
 }
 
 #[test]
-fn pqo3_memory_usage_increases_with_tokens() {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+fn pqo3_memory_usage_increases_with_tokens() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
     assert_eq!(cache.memory_usage(), 0);
 
     let (k, v) = make_kv(16, 14.0);
@@ -292,11 +300,12 @@ fn pqo3_memory_usage_increases_with_tokens() {
         usage > expected_min,
         "Memory usage {usage} too low, expected > {expected_min}"
     );
+    Ok(())
 }
 
 #[test]
-fn pqo3_multi_step_decode() {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+fn pqo3_multi_step_decode() -> candle_core::Result<()> {
+    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
     let config = AttendConfig {
         softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
         n_kv_groups: 2,
@@ -328,6 +337,7 @@ fn pqo3_multi_step_decode() {
         }
     }
     assert_eq!(cache.seq_len(TEST_LAYER), 14);
+    Ok(())
 }
 
 // -----------------------------------------------------------------------
@@ -355,8 +365,8 @@ mod gpu_tests {
     }
 
     #[test]
-    fn pqo3_gpu_decode_returns_fused() {
-        let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+    fn pqo3_gpu_decode_returns_fused() -> candle_core::Result<()> {
+        let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
 
         // Prefill on GPU
         let (k_pre, v_pre) = make_kv_gpu(8, 20.0);
@@ -398,11 +408,12 @@ mod gpu_tests {
                 panic!("GPU decode should use Fused path, got Dequantized");
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn pqo3_gpu_multi_step_decode_fused() {
-        let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+    fn pqo3_gpu_multi_step_decode_fused() -> candle_core::Result<()> {
+        let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
         let config = AttendConfig {
             softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
             n_kv_groups: 2,
@@ -434,11 +445,12 @@ mod gpu_tests {
             }
         }
         assert_eq!(cache.seq_len(TEST_LAYER), 9);
+        Ok(())
     }
 
     #[test]
-    fn pqo3_gpu_fused_quality_reasonable() {
-        let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+    fn pqo3_gpu_fused_quality_reasonable() -> candle_core::Result<()> {
+        let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
         let config = AttendConfig {
             softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
             n_kv_groups: 2,
@@ -456,7 +468,7 @@ mod gpu_tests {
             .unwrap();
 
         // Also compute dequantized path on CPU for comparison
-        let mut cache_cpu = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm));
+        let mut cache_cpu = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
         let (k_pre_cpu, v_pre_cpu) = make_kv(16, 30.0);
         let q_pre_cpu = make_q(16);
         cache_cpu
@@ -493,5 +505,6 @@ mod gpu_tests {
             let sim = cosine_sim(&cpu_result.k, &k_orig);
             assert!(sim > 0.85, "CPU dequant quality too low: {sim}");
         }
+        Ok(())
     }
 }
