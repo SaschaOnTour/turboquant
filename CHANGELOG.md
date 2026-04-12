@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **CI hardening**: All GitHub Actions pinned to immutable commit SHAs, `rustqual` version pinned, explicit `permissions: contents: read`, `cargo audit` step added.
+- **CI hardening**: All GitHub Actions pinned to immutable commit SHAs, explicit `permissions: contents: read`, `cargo audit` step added.
 - **Dependabot**: Added `.github/dependabot.yml` for Cargo and GitHub Actions weekly updates.
 - **Public API safety**: `PqoCache::new()`, `TqCache::new()`, and `compute_qjl_signs()` now return `Result` instead of panicking on invalid input.
 - **head_dim guard**: `GpuPrecomputed::new()` returns an error if `head_dim > 1024` (prevents silent CUDA shared memory overflow).

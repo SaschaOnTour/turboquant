@@ -37,7 +37,7 @@ jobs:
         run: cargo test
 
       - name: Security audit
-        run: cargo install cargo-audit --version =0.21.1 --locked && cargo audit
+        run: cargo install cargo-audit --locked && cargo audit
 
       - name: Install rustqual
         run: cargo install rustqual
