@@ -3,6 +3,8 @@
 //! All blocks use the outlier (higher-bit) codebook — the recommended mode
 //! for production use. Implements [`CompressedKVCache`] from `mistralrs-kv-cache`.
 
+#[cfg(feature = "cuda")]
+use candle_core::Device;
 use candle_core::{DType, Result, Tensor};
 use mistralrs_kv_cache::{AttendConfig, CompressedKVCache, DecodeOutput, DequantResult};
 use parking_lot::Mutex;
@@ -14,6 +16,8 @@ use super::common::{
 use super::config::CacheConfig;
 use super::precomputed::GpuPrecomputed;
 use super::storage::{LayerStorage, QuantizedKV, StorageMetadata};
+#[cfg(feature = "cuda")]
+use super::{cache_err, QUANT_BLOCK_SIZE};
 use super::{ensure_gpu_precomputed, PrecomputedState};
 
 /// PolarQuant Outlier (PQO) compressed KV-cache.
