@@ -21,6 +21,10 @@ name = "turboquant"
 default = []
 candle = ["dep:candle-core", "dep:mistralrs-kv-cache"]
 cuda = ["candle", "dep:cudaforge", "candle-core/cuda"]
+# Compiles test-only CUDA helpers (kernels that deliberately fail to
+# exercise error paths). Off by default so production/release builds
+# never link this code.
+cuda-test-support = ["cuda"]
 
 [dependencies]
 half = "2"

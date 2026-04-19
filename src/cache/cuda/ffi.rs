@@ -57,8 +57,6 @@ extern "C" {
         stream: CUstream,
     );
 
-    pub fn tq_test_trigger_launch_error(stream: CUstream);
-
     pub fn tq_fused_attention(
         q: *const f32,
         k_indices: *const u8,
