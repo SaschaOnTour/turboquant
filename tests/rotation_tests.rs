@@ -104,12 +104,18 @@ fn same_seed_produces_same_sign_pattern() {
 }
 
 #[test]
-fn different_seeds_produce_different_sign_patterns() {
+fn opposite_parity_seeds_produce_inverted_patterns() {
+    // `generate_sign_pattern` derives each sign from the LSB of
+    // `(seed + i) * GOLDEN_RATIO`. Because `GOLDEN_RATIO` is odd, the LSB
+    // tracks the parity of `(seed + i)`, so seeds of opposite parity produce
+    // element-wise inverted patterns — a deterministic relationship, not
+    // just "statistically different".
     let a = generate_sign_pattern(256, 1);
     let b = generate_sign_pattern(256, 2);
-    // They could theoretically match, but with 256 elements it is
-    // astronomically unlikely.
-    assert_ne!(a, b);
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(b.iter()) {
+        assert_eq!(*x, -*y);
+    }
 }
 
 #[test]
