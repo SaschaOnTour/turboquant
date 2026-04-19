@@ -30,11 +30,22 @@ jobs:
         env:
           RUSTFLAGS: "-Dwarnings"
 
+      - name: Clippy (candle)
+        run: cargo clippy --all-targets --features candle
+        env:
+          RUSTFLAGS: "-Dwarnings"
+
       - name: Build
         run: cargo build
 
+      - name: Build (candle)
+        run: cargo build --features candle
+
       - name: Test
         run: cargo test
+
+      - name: Test (candle)
+        run: cargo test --features candle
 
       - name: Security audit
         run: cargo install cargo-audit --locked && cargo audit

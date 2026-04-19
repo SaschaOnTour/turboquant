@@ -192,6 +192,13 @@ impl LayerStorage {
                 return Err(cache_err("active layer missing K/V scales buffer"));
             }
         }
+        let cap = self.capacity();
+        if self.buf_seq_len > cap {
+            return Err(cache_err(format!(
+                "buf_seq_len {} exceeds allocated capacity {}",
+                self.buf_seq_len, cap
+            )));
+        }
         Ok(())
     }
 

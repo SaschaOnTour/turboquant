@@ -86,9 +86,15 @@ pub fn ensure_gpu_precomputed<'a>(
         return Ok(p);
     }
     let fresh = GpuPrecomputed::new(config, device)?;
-    let _ = state.cell.set(fresh);
+    // `set` returns Err only if the cell was already populated; under the
+    // init_mutex that should be impossible, so surface any such race
+    // explicitly instead of silently discarding `fresh`.
+    state
+        .cell
+        .set(fresh)
+        .map_err(|_| cache_err("precomputed cell was initialized concurrently during set"))?;
     state
         .cell
         .get()
-        .ok_or_else(|| cache_err("precomputed cell unset after init — concurrent modification"))
+        .ok_or_else(|| cache_err("precomputed cell unset after successful set — unreachable"))
 }
