@@ -190,7 +190,7 @@ impl CompressedKVCache for PqoCache {
         k: &Tensor,
         v: &Tensor,
         q: &Tensor,
-        _config: &AttendConfig,
+        config: &AttendConfig,
     ) -> Result<DecodeOutput> {
         let device = k.device().clone();
         let orig_dtype = k.dtype();
@@ -200,11 +200,14 @@ impl CompressedKVCache for PqoCache {
 
         #[cfg(feature = "cuda")]
         if device.is_cuda() && guard.is_active() {
-            return self.decode_cuda(&guard, pre, q, _config.softmax_scale, orig_dtype, &device);
+            return self.decode_cuda(&guard, pre, q, config.softmax_scale, orig_dtype, &device);
         }
 
-        // CPU/Metal: full dequantize + return for SDPA
+        // CPU/Metal: full dequantize + return for SDPA; `q` and `config` are
+        // only consumed on the CUDA fused-attention path above.
         let _ = q;
+        #[cfg(not(feature = "cuda"))]
+        let _ = config;
         let (full_k, full_v) = self.dequantize_full(&guard, pre, orig_dtype)?;
         Ok(DecodeOutput::Dequantized(dequant_result(full_k, full_v)))
     }
