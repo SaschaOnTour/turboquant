@@ -4,7 +4,7 @@
 
 use turboquant::packed::TurboQuantConfig;
 use turboquant::qjl::quantize_with_qjl;
-use turboquant::quantize::{dequantize_vec, quantize_vec};
+use turboquant::quantize::dequantize_vec;
 use turboquant::test_utils::random_normal_vec;
 
 /// Rotation seed (shared across MSE tests).
@@ -52,10 +52,8 @@ fn compute_qjl_roundtrip_mse(bits: u8, dim: usize, num_vectors: usize) -> f64 {
         }
 
         let qjl_seed = QJL_MSE_SEED.wrapping_add(i as u64);
-        let _qjl_block = quantize_with_qjl(&config, &data, qjl_seed).unwrap();
-
-        let polar_block = quantize_vec(&polar_config, &data).unwrap();
-        let recovered = dequantize_vec(&polar_config, &polar_block).unwrap();
+        let qjl_block = quantize_with_qjl(&config, &data, qjl_seed).unwrap();
+        let recovered = dequantize_vec(&polar_config, &qjl_block.polar_block).unwrap();
 
         let err_sq: f64 = data
             .iter()
