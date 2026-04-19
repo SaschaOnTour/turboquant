@@ -30,11 +30,22 @@ jobs:
         env:
           RUSTFLAGS: "-Dwarnings"
 
+      - name: Clippy (candle)
+        run: cargo clippy --all-targets --features candle
+        env:
+          RUSTFLAGS: "-Dwarnings"
+
       - name: Build
         run: cargo build
 
+      - name: Build (candle)
+        run: cargo build --features candle
+
       - name: Test
         run: cargo test
+
+      - name: Test (candle)
+        run: cargo test --features candle
 
       - name: Security audit
         run: cargo install cargo-audit --locked && cargo audit
@@ -43,4 +54,6 @@ jobs:
         run: cargo install rustqual
 
       - name: Quality analysis
-        run: rustqual src/ --fail-on-warnings
+        # Scan the whole repository (src/, tests/, benches/, examples/)
+        # so that test-code quality issues are not silently ignored.
+        run: rustqual . --fail-on-warnings

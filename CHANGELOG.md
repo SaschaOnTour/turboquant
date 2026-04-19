@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-19
+
+### Changed
+
+- **Breaking: per-layer locking architecture.** `PqoCache` and `TqCache` now
+  use `Vec<parking_lot::Mutex<LayerStorage>>` internally, so calls for
+  different layers no longer serialize on a global mutex. This enables
+  concurrent forward passes (e.g. speculative decoding draft + target) to
+  run without lock contention.
+- **Breaking: `mistralrs-kv-cache` trait bumped to 0.3**. All mutating
+  trait methods now take `&self` instead of `&mut self`. Inference engines
+  can now hold a plain `Arc<dyn CompressedKVCache>` instead of
+  `Arc<Mutex<dyn CompressedKVCache>>`. See `mistralrs-kv-cache`
+  [CHANGELOG 0.3.0](https://github.com/SaschaOnTour/mistralrs-kv-cache/blob/main/CHANGELOG.md#030---2026-04-19)
+  for the migration guide.
+- **`CompressedStorage` split**: public API pivots to `StorageMetadata` +
+  `LayerStorage` + `LayerBuffers<'_>`. `CompressedStorage` is removed.
+  `LayerStorage::buffers()` replaces the four individual
+  `k_indices`/`v_indices`/`k_scales`/`v_scales` accessors.
+- **Lazy `GpuPrecomputed` init** now uses `std::sync::OnceLock` with a
+  helper `ensure_gpu_precomputed()`, replacing the previous `&mut self`
+  `ensure_precomputed` method on each cache.
+- **Shared test-utility module**: `turboquant::test_utils` is now
+  `#[doc(hidden)] pub` so integration tests, benches, and examples can
+  import the LCG helpers and `make_kv` / `pseudo_random_vec` generators
+  without each redefining them. The module is publicly reachable (and
+  therefore part of the SemVer surface) but hidden from rustdoc; it is
+  intended only for cross-file test/bench/example code.
+
+### Added
+
+- **New concurrency tests** (`tests/cache_concurrency_tests.rs`):
+  - `parallel_decode_different_layers` — verifies two threads can decode
+    into layer 0 and layer 1 simultaneously.
+  - `parallel_prefill_no_corruption` — compares parallel vs serial prefill.
+  - `concurrent_reset_decode` — stress-tests reset/decode race.
+  - `layer_independence_under_contention` — 8 threads × 30 decodes, all
+    layers independent.
+- **`LayerStorage::validate()`** — cross-field invariant check, called
+  from `append` via `debug_assert!` to catch state inconsistencies.
+- **Upstream rustqual bug reports** — filed for three rustqual
+  false-positives encountered during the refactor.
+
+### Fixed
+
+- **IOSP violation in `TqCache::reset`** — switched to iterator-chain
+  form so rustqual no longer counts it as a logic+call violation.
+
+### Performance
+
+- Uncontended single-stream decode is unchanged (`parking_lot::Mutex` is
+  roughly 2× faster than `std::sync::Mutex` when uncontended).
+- Multi-stream / multi-layer concurrent decode is now truly parallel —
+  previously all layers serialized on one mutex per cache.
+
+## [0.3.1] - Undocumented release
+
+See [0.2.0] for the prior documented release.
+
+## [0.3.0] - Undocumented release
+
 ### Changed
 
 - **CI hardening**: All GitHub Actions pinned to immutable commit SHAs, explicit `permissions: contents: read`, `cargo audit` step added.

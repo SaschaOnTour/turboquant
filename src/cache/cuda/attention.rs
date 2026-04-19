@@ -67,7 +67,7 @@ pub fn fused_attention(p: &FusedAttentionParams<'_>) -> Result<Tensor> {
         return Ok(output);
     }
 
-    let num_partitions = (*kv_len + PARTITION_SIZE - 1) / PARTITION_SIZE;
+    let num_partitions = (*kv_len).div_ceil(PARTITION_SIZE);
     let partial_out = Tensor::zeros(
         (*num_attention_heads * num_partitions, *head_dim),
         DType::F32,

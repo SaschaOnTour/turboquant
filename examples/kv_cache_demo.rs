@@ -37,14 +37,7 @@ const NUM_ENTRIES: usize = 1024;
 /// Number of attention scores to display.
 const DISPLAY_SCORES: usize = 8;
 
-/// LCG multiplier (Knuth's constant).
-const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
-
-/// LCG increment.
-const LCG_INCREMENT: u64 = 1;
-
-/// Right-shift for extracting bits from LCG state.
-const LCG_SHIFT: u32 = 33;
+use turboquant::test_utils::{pseudo_random_vec, LCG_MULTIPLIER};
 
 /// Amplitude for key vector generation.
 const KEY_AMPLITUDE: f32 = 1.0;
@@ -68,17 +61,12 @@ const BYTES_PER_KB: f64 = 1024.0;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Deterministic pseudo-random vector using a simple LCG.
+/// Deterministic pseudo-random vector scaled by `amplitude`, delegating the
+/// core LCG to the shared `test_utils::pseudo_random_vec`.
 fn lcg_vec(dim: usize, seed: u64, amplitude: f32) -> Vec<f32> {
-    let mut state = seed;
-    (0..dim)
-        .map(|_| {
-            state = state
-                .wrapping_mul(LCG_MULTIPLIER)
-                .wrapping_add(LCG_INCREMENT);
-            let bits = (state >> LCG_SHIFT) as i32;
-            amplitude * (bits as f32 / i32::MAX as f32)
-        })
+    pseudo_random_vec(dim, seed)
+        .into_iter()
+        .map(|x| amplitude * x)
         .collect()
 }
 

@@ -7,3 +7,4 @@ Cargo.lock
 .claude/
 coverage.lcov
 CLAUDE.md
+docs/

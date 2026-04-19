@@ -15,8 +15,12 @@ pub mod rotation;
 #[cfg(feature = "candle")]
 pub mod cache;
 
-#[cfg(test)]
-mod test_utils;
+/// Test helpers shared by integration tests and benches. Declared `pub mod`
+/// so cross-file test code can import them, and `#[doc(hidden)]` to keep
+/// them out of rustdoc — but note that this module *is* part of the crate's
+/// public API surface for SemVer purposes.
+#[doc(hidden)]
+pub mod test_utils;
 
 pub use attention::{PackedImport, QuantizedKVCache};
 pub use error::{Result, TurboQuantError};
