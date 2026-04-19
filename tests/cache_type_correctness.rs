@@ -9,10 +9,12 @@
 
 #![cfg(feature = "candle")]
 
+// qual:allow(srp) — cohesive integration-test module
 use candle_core::{DType, Device, Tensor};
 use mistralrs_kv_cache::{AttendConfig, CompressedKVCache, DecodeOutput};
 use turboquant::cache::config::QuantNormMode;
 use turboquant::cache::{CacheConfig, PqoCache, TqCache};
+use turboquant::test_utils::make_kv as shared_make_kv;
 
 const HEAD_DIM: usize = 128;
 const NUM_KV_HEADS: usize = 4;
@@ -30,18 +32,8 @@ fn cfg(outlier_blocks: usize) -> CacheConfig {
     }
 }
 
-fn make_kv(seq_len: usize, seed: f32) -> (Tensor, Tensor) {
-    let n = NUM_KV_HEADS * seq_len * HEAD_DIM;
-    let k: Vec<f32> = (0..n)
-        .map(|i| ((i as f32 + seed) * 0.0137).sin() * 2.0)
-        .collect();
-    let v: Vec<f32> = (0..n)
-        .map(|i| ((i as f32 + seed + 1000.0) * 0.0213).cos() * 1.5)
-        .collect();
-    (
-        Tensor::from_vec(k, (1, NUM_KV_HEADS, seq_len, HEAD_DIM), &Device::Cpu).unwrap(),
-        Tensor::from_vec(v, (1, NUM_KV_HEADS, seq_len, HEAD_DIM), &Device::Cpu).unwrap(),
-    )
+fn make_kv(seq_len: usize, seed: u32) -> (Tensor, Tensor) {
+    shared_make_kv(seq_len, NUM_KV_HEADS, HEAD_DIM, seed)
 }
 
 fn make_q(seq_len: usize) -> Tensor {
@@ -66,8 +58,8 @@ fn attend_config() -> AttendConfig {
 
 #[test]
 fn pq3_uses_standard_codebook() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(cfg(0))?;
-    let (k, v) = make_kv(4, 1.0);
+    let cache = PqoCache::new(cfg(0))?;
+    let (k, v) = make_kv(4, 1);
     let q = make_q(4);
     let result = cache.prefill(LAYER, &k, &v, &q).unwrap();
     assert!(result.logit_bias.is_none(), "PQ3 should have no logit_bias");
@@ -77,16 +69,16 @@ fn pq3_uses_standard_codebook() -> candle_core::Result<()> {
 #[test]
 fn pq3_and_pqo3_both_produce_valid_output() -> candle_core::Result<()> {
     // Verify both PQ3 and PQO3 produce valid decode output (correct shapes, no crash)
-    let (k, v) = make_kv(8, 10.0);
+    let (k, v) = make_kv(8, 10);
     let q = make_q(8);
 
-    let mut pq = PqoCache::new(cfg(0))?;
-    let mut pqo = PqoCache::new(cfg(usize::MAX))?;
+    let pq = PqoCache::new(cfg(0))?;
+    let pqo = PqoCache::new(cfg(usize::MAX))?;
 
     pq.prefill(LAYER, &k, &v, &q).unwrap();
     pqo.prefill(LAYER, &k, &v, &q).unwrap();
 
-    let (k_dec, v_dec) = make_kv(1, 11.0);
+    let (k_dec, v_dec) = make_kv(1, 11);
     let q_dec = make_q(1);
     let config = attend_config();
 
@@ -111,8 +103,8 @@ fn pq3_and_pqo3_both_produce_valid_output() -> candle_core::Result<()> {
 
 #[test]
 fn pqo3_uses_outlier_codebook() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(cfg(usize::MAX))?;
-    let (k, v) = make_kv(4, 2.0);
+    let cache = PqoCache::new(cfg(usize::MAX))?;
+    let (k, v) = make_kv(4, 2);
     let q = make_q(4);
     let result = cache.prefill(LAYER, &k, &v, &q).unwrap();
     assert!(
@@ -124,11 +116,11 @@ fn pqo3_uses_outlier_codebook() -> candle_core::Result<()> {
 
 #[test]
 fn pqo4_uses_outlier_codebook() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(CacheConfig {
+    let cache = PqoCache::new(CacheConfig {
         bits: 4,
         ..cfg(usize::MAX)
     })?;
-    let (k, v) = make_kv(4, 3.0);
+    let (k, v) = make_kv(4, 3);
     let q = make_q(4);
     let result = cache.prefill(LAYER, &k, &v, &q).unwrap();
     assert!(
@@ -146,8 +138,8 @@ fn pqo4_uses_outlier_codebook() -> candle_core::Result<()> {
 fn tq3_prefill_returns_logit_bias() {
     // TQ3 = 2-bit PolarQuant + 1-bit QJL. The QJL correction produces a
     // logit_bias that must be returned in DequantResult.
-    let mut cache = create_tq3_cache();
-    let (k, v) = make_kv(4, 5.0);
+    let cache = create_tq3_cache();
+    let (k, v) = make_kv(4, 5);
     let q = make_q(4);
     let result = cache.prefill(LAYER, &k, &v, &q).unwrap();
 
@@ -160,12 +152,12 @@ fn tq3_prefill_returns_logit_bias() {
 
 #[test]
 fn tq3_decode_returns_logit_bias() {
-    let mut cache = create_tq3_cache();
-    let (k, v) = make_kv(4, 6.0);
+    let cache = create_tq3_cache();
+    let (k, v) = make_kv(4, 6);
     let q = make_q(4);
     cache.prefill(LAYER, &k, &v, &q).unwrap();
 
-    let (k_dec, v_dec) = make_kv(1, 7.0);
+    let (k_dec, v_dec) = make_kv(1, 7);
     let q_dec = make_q(1);
     let config = attend_config();
     let output = cache
@@ -187,8 +179,8 @@ fn tq3_decode_returns_logit_bias() {
 
 #[test]
 fn tq4_prefill_returns_logit_bias() {
-    let mut cache = create_tq4_cache();
-    let (k, v) = make_kv(4, 8.0);
+    let cache = create_tq4_cache();
+    let (k, v) = make_kv(4, 8);
     let q = make_q(4);
     let result = cache.prefill(LAYER, &k, &v, &q).unwrap();
 

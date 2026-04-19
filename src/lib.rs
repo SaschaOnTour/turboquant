@@ -15,8 +15,10 @@ pub mod rotation;
 #[cfg(feature = "candle")]
 pub mod cache;
 
-#[cfg(test)]
-mod test_utils;
+/// Test helpers exposed via `#[doc(hidden)] pub mod` — reachable from
+/// integration tests and benches but not part of the public API.
+#[doc(hidden)]
+pub mod test_utils;
 
 pub use attention::{PackedImport, QuantizedKVCache};
 pub use error::{Result, TurboQuantError};

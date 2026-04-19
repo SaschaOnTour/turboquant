@@ -12,6 +12,7 @@
 //! LCG-based uniform coordinates with normalization does NOT produce
 //! uniform unit vectors and leads to inflated MSE (see analysis 2026-04-05).
 
+// qual:allow(srp) — cohesive integration-test module
 use turboquant::packed::TurboQuantConfig;
 use turboquant::qjl::{
     dot_product, estimate_inner_product_single, qjl_scaling_constant, quantize_with_qjl, sign_bit,
@@ -46,6 +47,31 @@ const ROTATION_SEED: u64 = 42;
 /// Number of samples for statistical tests.
 const STAT_SAMPLES: usize = 2000;
 
+// Distinct prime multipliers used to derive per-sample seeds. Each theorem
+// test uses a different pair so that x- and y-vectors (or per-bit-width
+// samples) remain uncorrelated across tests.
+const SEED_PRIME_UNBIAS_X: u64 = 31;
+const SEED_PRIME_UNBIAS_Y: u64 = 37;
+const SEED_PRIME_MSE: u64 = 41;
+const SEED_PRIME_DISTORTION_B3_X: u64 = 43;
+const SEED_PRIME_DISTORTION_B3_Y: u64 = 47;
+const SEED_PRIME_DISTORTION_B4_X: u64 = 53;
+const SEED_PRIME_DISTORTION_B4_Y: u64 = 59;
+const SEED_PRIME_POLAR_X: u64 = 61;
+const SEED_PRIME_POLAR_Y: u64 = 67;
+const SEED_PRIME_RESIDUAL: u64 = 71;
+
+const QJL_SEED_OFFSET_B4: u64 = 77_777;
+const ALGORITHM2_SEED: u64 = 42_424;
+const RESIDUAL_SEED: u64 = 13_579;
+
+/// Allowed mean-bias tolerance for the unbiasedness theorem (statistical noise budget).
+const UNBIAS_MEAN_TOLERANCE: f64 = 0.03;
+/// Multiplicative margin applied to the paper's MSE-bound predictions.
+const MSE_BOUND_MARGIN: f64 = 1.3;
+/// Expected compression ratio (TQ3 vs fp16) as published in the paper.
+const PAPER_COMPRESSION_RATIO: f64 = 4.5;
+
 // ---------------------------------------------------------------------------
 // PRNG: SplitMix64 — high-quality 64-bit generator
 //
@@ -57,6 +83,16 @@ const STAT_SAMPLES: usize = 2000;
 const SPLITMIX_GAMMA: u64 = 0x9e37_79b9_7f4a_7c15;
 const SPLITMIX_MUL1: u64 = 0xbf58_476d_1ce4_e5b9;
 const SPLITMIX_MUL2: u64 = 0x94d0_49bb_1331_11eb;
+/// First xor-shift amount for the SplitMix64 finalizer.
+const SPLITMIX_SHIFT_1: u32 = 30;
+/// Second xor-shift amount for the SplitMix64 finalizer.
+const SPLITMIX_SHIFT_2: u32 = 27;
+/// Third xor-shift amount for the SplitMix64 finalizer.
+const SPLITMIX_SHIFT_3: u32 = 31;
+/// Number of mantissa bits in an f64 (IEEE-754).
+const F64_MANTISSA_BITS: u32 = 53;
+/// Right-shift to keep exactly `F64_MANTISSA_BITS` bits of a u64.
+const U64_TO_F64_SHIFT: u32 = 64 - F64_MANTISSA_BITS;
 
 struct SplitMix64 {
     state: u64,
@@ -70,16 +106,16 @@ impl SplitMix64 {
     fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(SPLITMIX_GAMMA);
         let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(SPLITMIX_MUL1);
-        z = (z ^ (z >> 27)).wrapping_mul(SPLITMIX_MUL2);
-        z ^ (z >> 31)
+        z = (z ^ (z >> SPLITMIX_SHIFT_1)).wrapping_mul(SPLITMIX_MUL1);
+        z = (z ^ (z >> SPLITMIX_SHIFT_2)).wrapping_mul(SPLITMIX_MUL2);
+        z ^ (z >> SPLITMIX_SHIFT_3)
     }
 
     /// Returns a f64 in (0, 1), never exactly 0 or 1.
     fn next_open01(&mut self) -> f64 {
         // Use 53 bits for double precision: (bits >> 11) * 2^-53
         // Add 0.5 ULP to avoid exactly 0.0
-        ((self.next_u64() >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+        ((self.next_u64() >> U64_TO_F64_SHIFT) as f64 + 0.5) / (1u64 << F64_MANTISSA_BITS) as f64
     }
 }
 
@@ -149,8 +185,8 @@ fn theorem2_unbiasedness() {
         // CRITICAL: different S per sample (paper's expectation is over S)
         let qjl_seed = 12345_u64.wrapping_add(i as u64);
 
-        let x = random_unit_vec(DIM, i as u64 * 31 + 1000);
-        let y = random_unit_vec(DIM, i as u64 * 37 + 2000);
+        let x = random_unit_vec(DIM, i as u64 * SEED_PRIME_UNBIAS_X + 1000);
+        let y = random_unit_vec(DIM, i as u64 * SEED_PRIME_UNBIAS_Y + 2000);
         let true_ip = dot_product(&x, &y) as f64;
 
         let config = TurboQuantConfig::new(total_bits, DIM)
@@ -165,7 +201,7 @@ fn theorem2_unbiasedness() {
     let mean_bias = (bias_sum / STAT_SAMPLES as f64).abs();
 
     // Paper: exact unbiasedness. With 2000 samples, tolerance for statistical noise.
-    let tolerance = 0.03;
+    let tolerance = UNBIAS_MEAN_TOLERANCE;
     assert!(
         mean_bias < tolerance,
         "Paper Theorem 2 violated: mean bias = {mean_bias:.4} \
@@ -193,7 +229,7 @@ fn theorem1_mse_bound() {
 
         let mut mse_sum = 0.0_f64;
         for i in 0..STAT_SAMPLES {
-            let x = random_unit_vec(DIM, i as u64 * 41 + bits as u64 * 10000);
+            let x = random_unit_vec(DIM, i as u64 * SEED_PRIME_MSE + bits as u64 * 10000);
             let block = quantize_vec(&config, &x).unwrap();
             let x_hat = dequantize_vec(&config, &block).unwrap();
 
@@ -210,7 +246,7 @@ fn theorem1_mse_bound() {
         // Allow 30% margin: the paper values are approximations, and
         // Rademacher rotation (vs Gaussian in paper) may give slightly
         // different constants.
-        let margin = 1.3;
+        let margin = MSE_BOUND_MARGIN;
         eprintln!(
             "Theorem 1 MSE (b={bits}, d={DIM}): empirical={empirical_mse:.6}, \
              paper={expected_mse:.6}, ratio={:.2}",
@@ -246,8 +282,8 @@ fn theorem2_distortion_bound_b3() {
     for i in 0..STAT_SAMPLES {
         let qjl_seed = 99999_u64.wrapping_add(i as u64);
 
-        let x = random_unit_vec(DIM, i as u64 * 43 + 3000);
-        let y = random_unit_vec(DIM, i as u64 * 47 + 4000);
+        let x = random_unit_vec(DIM, i as u64 * SEED_PRIME_DISTORTION_B3_X + 3000);
+        let y = random_unit_vec(DIM, i as u64 * SEED_PRIME_DISTORTION_B3_Y + 4000);
         let true_ip = dot_product(&x, &y) as f64;
 
         let config = TurboQuantConfig::new(total_bits, DIM)
@@ -286,10 +322,10 @@ fn theorem2_distortion_bound_b4() {
     let mut distortion_sum = 0.0_f64;
 
     for i in 0..STAT_SAMPLES {
-        let qjl_seed = 77777_u64.wrapping_add(i as u64);
+        let qjl_seed = QJL_SEED_OFFSET_B4.wrapping_add(i as u64);
 
-        let x = random_unit_vec(DIM, i as u64 * 53 + 5000);
-        let y = random_unit_vec(DIM, i as u64 * 59 + 6000);
+        let x = random_unit_vec(DIM, i as u64 * SEED_PRIME_DISTORTION_B4_X + 5000);
+        let y = random_unit_vec(DIM, i as u64 * SEED_PRIME_DISTORTION_B4_Y + 6000);
         let true_ip = dot_product(&x, &y) as f64;
 
         let config = TurboQuantConfig::new(total_bits, DIM)
@@ -332,6 +368,7 @@ fn theorem2_distortion_bound_b4() {
 /// polar_estimate vs true_ip (should be < 1.0 for polar, = 1.0 for QJL).
 ///
 /// Equivalently: E[polar_ip · true_ip] / E[true_ip²] < 1.0
+// qual:allow(complexity) — one statistical assertion per test; splitting would require duplicating the 2000-sample Monte-Carlo loop
 #[test]
 fn polar_only_has_multiplicative_bias_qjl_fixes_it() {
     let total_bits: u8 = 3;
@@ -344,8 +381,8 @@ fn polar_only_has_multiplicative_bias_qjl_fixes_it() {
     for i in 0..STAT_SAMPLES {
         let qjl_seed = 55555_u64.wrapping_add(i as u64);
 
-        let x = random_unit_vec(DIM, i as u64 * 61 + 7000);
-        let y = random_unit_vec(DIM, i as u64 * 67 + 8000);
+        let x = random_unit_vec(DIM, i as u64 * SEED_PRIME_POLAR_X + 7000);
+        let y = random_unit_vec(DIM, i as u64 * SEED_PRIME_POLAR_Y + 8000);
         let true_ip = dot_product(&x, &y) as f64;
 
         // Polar-only (no QJL)
@@ -415,7 +452,7 @@ fn algorithm2_formula_matches_implementation() {
 
     let total_bits: u8 = 3;
     let polar_bits = total_bits - 1;
-    let qjl_seed: u64 = 42424;
+    let qjl_seed: u64 = ALGORITHM2_SEED;
 
     let x = random_unit_vec(DIM, 11111);
     let y = random_unit_vec(DIM, 22222);
@@ -501,6 +538,7 @@ fn wht_is_self_inverse() {
 // ---------------------------------------------------------------------------
 
 /// Paper Abstract: "compressing quantized vectors by at least a factor of 4.5×"
+// qual:allow(no_sut) — verifies the paper's byte-count formula, not a function; values are compared as pure arithmetic (no SUT call to instrument)
 #[test]
 fn compression_ratio_matches_paper() {
     let dim: usize = 128;
@@ -520,7 +558,7 @@ fn compression_ratio_matches_paper() {
     assert_eq!(total_tq3_bytes, 52, "Total TQ3: 32 + 2 + 16 + 2 = 52 bytes");
     assert_eq!(fp16_bytes, 256, "FP16: 128 x 2 = 256 bytes");
 
-    let min_compression = 4.5;
+    let min_compression = PAPER_COMPRESSION_RATIO;
     assert!(
         compression >= min_compression,
         "Compression {compression:.2}x below paper's {min_compression}x claim"
@@ -538,7 +576,7 @@ fn residual_norm_equals_quantization_error() {
     let polar_bits = total_bits - 1;
 
     for i in 0..20 {
-        let x = random_unit_vec(DIM, i * 71 + 100);
+        let x = random_unit_vec(DIM, i * SEED_PRIME_RESIDUAL + 100);
         let config = TurboQuantConfig::new(total_bits, DIM)
             .unwrap()
             .with_seed(ROTATION_SEED);
@@ -546,7 +584,7 @@ fn residual_norm_equals_quantization_error() {
             .unwrap()
             .with_seed(ROTATION_SEED);
 
-        let qjl_seed = 13579_u64.wrapping_add(i);
+        let qjl_seed = RESIDUAL_SEED.wrapping_add(i);
         let block = quantize_with_qjl(&config, &x, qjl_seed).unwrap();
 
         let x_mse = dequantize_vec(&polar_config, &block.polar_block).unwrap();

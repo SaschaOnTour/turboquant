@@ -4,27 +4,40 @@
 //! Uses standard codebook (outlier_blocks=0) plus QJL bias correction
 //! to achieve unbiased inner-product estimates.
 
+use std::sync::OnceLock;
+
 use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_kv_cache::{AttendConfig, CompressedKVCache, DecodeOutput, DequantResult};
+use parking_lot::Mutex;
 
 use super::cache_err;
-use super::common::{dequantize_full_impl, flatten_kv, make_quant_config, quantize_kv_pair};
-use super::config::{CacheConfig, BITS_PER_BYTE, DEFAULT_QJL_SEED, QUANT_BLOCK_SIZE};
+use super::common::{
+    dequantize_full_impl, flatten_kv, make_quant_config, quantize_kv_pair,
+    validate_and_make_metadata,
+};
+use super::config::{CacheConfig, BITS_PER_BYTE, DEFAULT_QJL_SEED};
+use super::ensure_gpu_precomputed;
 use super::precomputed::GpuPrecomputed;
 use super::quantize_tensor::polar_dequantize;
-use super::storage::{CompressedStorage, QuantizedKV};
+use super::storage::{LayerStorage, QuantizedKV, StorageMetadata};
 
 /// Minimum growth increment when expanding QJL sign/norm buffers.
 const MIN_QJL_GROW: usize = 128;
 
+/// Per-layer state for TqCache: quantized storage + QJL auxiliary data.
+#[derive(Default)]
+struct TqLayer {
+    storage: LayerStorage,
+    qjl_signs: Option<Tensor>,
+    qjl_norms: Option<Tensor>,
+}
+
 /// TurboQuant cache: (bits-1)-bit PolarQuant + 1-bit QJL correction.
 pub struct TqCache {
     config: CacheConfig,
-    storage: CompressedStorage,
-    precomputed: Option<GpuPrecomputed>,
-    // QJL data per layer
-    qjl_signs: Vec<Option<Tensor>>,
-    qjl_norms: Vec<Option<Tensor>>,
+    metadata: StorageMetadata,
+    precomputed: OnceLock<GpuPrecomputed>,
+    layers: Vec<Mutex<TqLayer>>,
 }
 
 impl TqCache {
@@ -32,43 +45,28 @@ impl TqCache {
     ///
     /// Returns an error if `head_dim` is not divisible by `QUANT_BLOCK_SIZE` (32).
     pub fn new(config: CacheConfig) -> candle_core::Result<Self> {
-        if config.head_dim % QUANT_BLOCK_SIZE != 0 {
-            candle_core::bail!(
-                "head_dim ({}) must be divisible by QUANT_BLOCK_SIZE ({QUANT_BLOCK_SIZE}). \
-                 Models with head_dim={} are not supported by TurboQuant compression.",
-                config.head_dim,
-                config.head_dim
-            );
-        }
-        let storage = CompressedStorage::new(
-            config.num_kv_heads,
-            config.head_dim,
-            config.bits,
-            config.num_layers,
-        );
-        let num_layers = config.num_layers;
+        let metadata = validate_and_make_metadata(&config)?;
+        let layers = (0..config.num_layers)
+            .map(|_| Mutex::new(TqLayer::default()))
+            .collect();
         Ok(Self {
             config,
-            storage,
-            precomputed: None,
-            qjl_signs: vec![None; num_layers],
-            qjl_norms: vec![None; num_layers],
+            metadata,
+            precomputed: OnceLock::new(),
+            layers,
         })
     }
 
-    fn ensure_precomputed(&mut self, device: &Device) -> Result<()> {
-        if self.precomputed.is_some() {
-            return Ok(());
-        }
-        self.precomputed = Some(GpuPrecomputed::new(&self.config, device)?);
-        Ok(())
-    }
-
-    /// Ensure QJL buffers have capacity for `needed` tokens.
-    fn ensure_qjl_capacity(&mut self, layer: usize, needed: usize, device: &Device) -> Result<()> {
+    /// Ensure QJL buffers for the locked layer have capacity for `needed` tokens.
+    fn ensure_qjl_capacity(
+        &self,
+        layer_slot: &mut TqLayer,
+        needed: usize,
+        device: &Device,
+    ) -> Result<()> {
         let signs_per_head = self.config.head_dim / BITS_PER_BYTE;
         let heads = self.config.num_kv_heads;
-        let current_cap = self.qjl_signs[layer].as_ref().map_or(0, |t| t.dims()[1]);
+        let current_cap = layer_slot.qjl_signs.as_ref().map_or(0, |t| t.dims()[1]);
 
         if current_cap >= needed {
             return Ok(());
@@ -76,45 +74,47 @@ impl TqCache {
 
         let grow = (needed / 4).max(MIN_QJL_GROW);
         let new_cap = needed + grow;
-        let old_seq = self.storage.seq_len(layer);
+        let old_seq = layer_slot.storage.seq_len();
 
         let new_signs = Tensor::zeros((heads, new_cap, signs_per_head), DType::U8, device)?;
         let new_norms = Tensor::zeros((heads, new_cap), DType::F16, device)?;
 
         if old_seq > 0 {
-            if let Some(ref old) = self.qjl_signs[layer] {
+            if let Some(ref old) = layer_slot.qjl_signs {
                 new_signs.slice_set(&old.narrow(1, 0, old_seq)?, 1, 0)?;
             }
-            if let Some(ref old) = self.qjl_norms[layer] {
+            if let Some(ref old) = layer_slot.qjl_norms {
                 new_norms.slice_set(&old.narrow(1, 0, old_seq)?, 1, 0)?;
             }
         }
 
-        self.qjl_signs[layer] = Some(new_signs);
-        self.qjl_norms[layer] = Some(new_norms);
+        layer_slot.qjl_signs = Some(new_signs);
+        layer_slot.qjl_norms = Some(new_norms);
         Ok(())
     }
 
-    /// Quantize + store + compute QJL signs/norms for new tokens.
+    /// Quantize + store + compute QJL signs/norms for new tokens. Caller holds the lock.
+    // qual:allow(iosp) — orchestrator that coordinates six steps: ensure capacity, flatten, quantize, reshape, append, compute QJL; splitting introduces param-passing overhead (see docs/rustqual-bugs.md)
     fn quantize_and_store(
-        &mut self,
-        layer: usize,
+        &self,
+        layer_slot: &mut TqLayer,
         k: &Tensor,
         v: &Tensor,
+        pre: &GpuPrecomputed,
     ) -> Result<(usize, usize)> {
         let device = k.device().clone();
-        self.ensure_precomputed(&device)?;
 
         let new_seq_len = k.dims()[2];
-        let old_seq_len = self.storage.seq_len(layer);
+        let old_seq_len = layer_slot.storage.seq_len();
         let total_seq_len = old_seq_len + new_seq_len;
-        self.storage
-            .ensure_capacity(layer, total_seq_len, &device)?;
-        self.ensure_qjl_capacity(layer, total_seq_len, &device)?;
+        layer_slot
+            .storage
+            .ensure_capacity(total_seq_len, &self.metadata, &device)?;
+        self.ensure_qjl_capacity(layer_slot, total_seq_len, &device)?;
 
         let (k_flat, v_flat) = flatten_kv(k, v, self.config.num_kv_heads, self.config.head_dim)?;
 
-        let qc = make_quant_config(&self.precomputed, &self.config)?;
+        let qc = make_quant_config(pre, &self.config);
         let packed_dim = qc.packed_dim();
         let num_blocks = qc.num_blocks();
 
@@ -133,17 +133,17 @@ impl TqCache {
             v_indices: &v_idx_r,
             v_scales: &v_sc_r,
         };
-        self.storage.append(layer, old_seq_len, &kv, new_seq_len)?;
+        layer_slot.storage.append(old_seq_len, &kv, new_seq_len)?;
 
-        self.compute_and_store_qjl(layer, &k_flat, &k_idx, &k_sc, &qc)?;
+        self.compute_and_store_qjl(layer_slot, &k_flat, &k_idx, &k_sc, &qc)?;
 
         Ok((old_seq_len, total_seq_len))
     }
 
-    /// Compute QJL sign bits and residual norms, then store in QJL buffers.
+    /// Compute QJL sign bits and residual norms, then store in the locked layer's QJL buffers.
     fn compute_and_store_qjl(
         &self,
-        layer: usize,
+        layer_slot: &mut TqLayer,
         k_flat: &Tensor,
         k_idx: &Tensor,
         k_sc: &Tensor,
@@ -155,7 +155,7 @@ impl TqCache {
         let num_blocks = qc.num_blocks();
         let n_vecs = k_flat.dims()[0];
         let new_seq_len = n_vecs / num_kv_heads;
-        let old_seq_len = self.storage.seq_len(layer) - new_seq_len;
+        let old_seq_len = layer_slot.storage.seq_len() - new_seq_len;
 
         let k_idx_flat = k_idx.reshape((n_vecs, packed_dim))?;
         let k_sc_flat = k_sc.reshape((n_vecs, num_blocks))?;
@@ -168,11 +168,13 @@ impl TqCache {
         let signs_r = signs_tensor.reshape((num_kv_heads, new_seq_len, signs_per_head))?;
         let norms_r = norms_tensor.reshape((num_kv_heads, new_seq_len))?;
 
-        self.qjl_signs[layer]
+        layer_slot
+            .qjl_signs
             .as_ref()
             .ok_or_else(|| cache_err("qjl_signs not initialized"))?
             .slice_set(&signs_r, 1, old_seq_len)?;
-        self.qjl_norms[layer]
+        layer_slot
+            .qjl_norms
             .as_ref()
             .ok_or_else(|| cache_err("qjl_norms not initialized"))?
             .slice_set(&norms_r, 1, old_seq_len)?;
@@ -180,13 +182,16 @@ impl TqCache {
         Ok(())
     }
 
-    /// Compute QJL logit bias for attention correction.
+    /// Compute QJL logit bias for attention correction. Caller holds the lock.
     // qual:allow(TQ-003) — tested via cache_type_correctness integration tests
-    fn compute_logit_bias(&self, layer: usize, q: &Tensor) -> Result<Tensor> {
+    fn compute_logit_bias(
+        &self,
+        layer_slot: &TqLayer,
+        pre: &GpuPrecomputed,
+        q: &Tensor,
+    ) -> Result<Tensor> {
         let head_dim = self.config.head_dim;
-        let total_seq = self.storage.seq_len(layer);
-        let qc = make_quant_config(&self.precomputed, &self.config)?;
-        let pre = qc.pre;
+        let total_seq = layer_slot.storage.seq_len();
 
         // q shape: [1, num_attn_heads, q_len, head_dim]
         let q_dims = q.dims4()?;
@@ -202,10 +207,12 @@ impl TqCache {
         let mut head_corrections = Vec::with_capacity(self.config.num_kv_heads);
         let n_kv_groups = num_attn_heads / self.config.num_kv_heads;
 
-        let qjl_signs = self.qjl_signs[layer]
+        let qjl_signs = layer_slot
+            .qjl_signs
             .as_ref()
             .ok_or_else(|| cache_err("qjl_signs not initialized"))?;
-        let qjl_norms = self.qjl_norms[layer]
+        let qjl_norms = layer_slot
+            .qjl_norms
             .as_ref()
             .ok_or_else(|| cache_err("qjl_norms not initialized"))?;
 
@@ -253,30 +260,32 @@ impl TqCache {
     }
 
     // qual:allow(TQ-003) — wrapper delegates to dequantize_full_impl, tested via integration tests
-    fn dequantize_full(&self, layer: usize, orig_dtype: DType) -> Result<(Tensor, Tensor)> {
-        let qc = make_quant_config(&self.precomputed, &self.config)?;
-        dequantize_full_impl(&self.storage, &qc, layer, orig_dtype)
+    fn dequantize_full(
+        &self,
+        layer_slot: &TqLayer,
+        pre: &GpuPrecomputed,
+        orig_dtype: DType,
+    ) -> Result<(Tensor, Tensor)> {
+        let qc = make_quant_config(pre, &self.config);
+        dequantize_full_impl(&layer_slot.storage, &self.metadata, &qc, orig_dtype)
     }
 }
 
 impl CompressedKVCache for TqCache {
-    fn prefill(
-        &mut self,
-        layer: usize,
-        k: &Tensor,
-        v: &Tensor,
-        q: &Tensor,
-    ) -> Result<DequantResult> {
+    // qual:allow(iosp) — trait entry point orchestrating precomputed init, lock acquisition, quantize-and-store, dequantize, and logit-bias computation (see docs/rustqual-bugs.md)
+    fn prefill(&self, layer: usize, k: &Tensor, v: &Tensor, q: &Tensor) -> Result<DequantResult> {
         let orig_dtype = k.dtype();
-        let (old_seq_len, _total) = self.quantize_and_store(layer, k, v)?;
+        let pre = ensure_gpu_precomputed(&self.precomputed, &self.config, k.device())?;
+        let mut guard = self.layers[layer].lock();
+        let (old_seq_len, _total) = self.quantize_and_store(&mut guard, k, v, pre)?;
 
         let (full_k, full_v) = if old_seq_len == 0 {
             (k.clone(), v.clone())
         } else {
-            self.dequantize_full(layer, orig_dtype)?
+            self.dequantize_full(&guard, pre, orig_dtype)?
         };
 
-        let logit_bias = self.compute_logit_bias(layer, q)?;
+        let logit_bias = self.compute_logit_bias(&guard, pre, q)?;
         Ok(DequantResult {
             k: full_k,
             v: full_v,
@@ -285,7 +294,7 @@ impl CompressedKVCache for TqCache {
     }
 
     fn decode(
-        &mut self,
+        &self,
         layer: usize,
         k: &Tensor,
         v: &Tensor,
@@ -293,11 +302,13 @@ impl CompressedKVCache for TqCache {
         _config: &AttendConfig,
     ) -> Result<DecodeOutput> {
         let orig_dtype = k.dtype();
-        self.quantize_and_store(layer, k, v)?;
+        let pre = ensure_gpu_precomputed(&self.precomputed, &self.config, k.device())?;
+        let mut guard = self.layers[layer].lock();
+        self.quantize_and_store(&mut guard, k, v, pre)?;
 
         // TQ always uses dequant path (no fused kernel with inline QJL yet)
-        let (full_k, full_v) = self.dequantize_full(layer, orig_dtype)?;
-        let logit_bias = self.compute_logit_bias(layer, q)?;
+        let (full_k, full_v) = self.dequantize_full(&guard, pre, orig_dtype)?;
+        let logit_bias = self.compute_logit_bias(&guard, pre, q)?;
 
         Ok(DecodeOutput::Dequantized(DequantResult {
             k: full_k,
@@ -307,27 +318,30 @@ impl CompressedKVCache for TqCache {
     }
 
     fn seq_len(&self, layer: usize) -> usize {
-        self.storage.seq_len(layer)
+        self.layers[layer].lock().storage.seq_len()
     }
-    fn reset(&mut self) -> Result<()> {
-        self.storage.reset();
-        for signs in &mut self.qjl_signs {
-            *signs = None;
-        }
-        for norms in &mut self.qjl_norms {
-            *norms = None;
-        }
+
+    fn reset(&self) -> Result<()> {
+        self.layers
+            .iter()
+            .for_each(|m| *m.lock() = TqLayer::default());
         Ok(())
     }
+
     fn memory_usage(&self) -> usize {
-        let qjl_bytes: usize = self
-            .qjl_signs
+        self.layers
             .iter()
-            .chain(self.qjl_norms.iter())
-            .filter_map(|t| t.as_ref())
-            .map(|t| t.elem_count() * t.dtype().size_in_bytes())
-            .sum();
-        self.storage.memory_usage() + qjl_bytes
+            .map(|m| {
+                let g = m.lock();
+                let storage_bytes = g.storage.memory_usage(&self.metadata);
+                let qjl_bytes: usize = [g.qjl_signs.as_ref(), g.qjl_norms.as_ref()]
+                    .iter()
+                    .flatten()
+                    .map(|t| t.elem_count() * t.dtype().size_in_bytes())
+                    .sum();
+                storage_bytes + qjl_bytes
+            })
+            .sum()
     }
 }
 
@@ -401,7 +415,7 @@ fn compute_qjl_signs_and_norms(
     for vec_idx in 0..n_vecs {
         let row_data = &all_residual[vec_idx * head_dim..(vec_idx + 1) * head_dim];
         let signs = crate::compute_qjl_signs(row_data, head_dim, DEFAULT_QJL_SEED)
-            .map_err(|e| super::cache_err(e))?;
+            .map_err(super::cache_err)?;
         let start = vec_idx * signs_per_head;
         all_signs[start..start + signs_per_head].copy_from_slice(&signs);
     }

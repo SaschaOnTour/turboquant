@@ -1,12 +1,14 @@
 //! Criterion benchmarks for TurboQuant quantization, dequantization,
 //! QJL inner-product estimation, and attention operations.
 
+// qual:allow(BP-010) — criterion::bench_with_input closure signatures are mandated by the library and cannot be refactored
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use turboquant::attention::QuantizedKVCache;
 use turboquant::packed::TurboQuantConfig;
 use turboquant::qjl::{estimate_inner_product, precompute_query_projections, quantize_with_qjl};
 use turboquant::quantize::{dequantize_vec, quantize_vec};
+use turboquant::test_utils::pseudo_random_vec;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -21,9 +23,6 @@ const BITS_TQ4: u8 = 4;
 
 const ROTATION_SEED: u64 = 42;
 const QJL_SEED: u64 = 12345;
-const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
-const LCG_INCREMENT: u64 = 1;
-const LCG_SHIFT: u32 = 33;
 
 const CACHE_SEQ_LEN: usize = 1024;
 const BENCH_NUM_LAYERS: usize = 1;
@@ -32,19 +31,6 @@ const BENCH_LAYER: usize = 0;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn pseudo_random_vec(dim: usize, seed: u64) -> Vec<f32> {
-    let mut state = seed;
-    (0..dim)
-        .map(|_| {
-            state = state
-                .wrapping_mul(LCG_MULTIPLIER)
-                .wrapping_add(LCG_INCREMENT);
-            let bits = (state >> LCG_SHIFT) as i32;
-            bits as f32 / (i32::MAX as f32)
-        })
-        .collect()
-}
 
 fn make_config(bits: u8, dim: usize) -> TurboQuantConfig {
     TurboQuantConfig::new(bits, dim)
@@ -56,6 +42,7 @@ fn make_config(bits: u8, dim: usize) -> TurboQuantConfig {
 // Benchmark: quantize_vec
 // ---------------------------------------------------------------------------
 
+// qual:allow(BP-010) — criterion benchmark_group idiom
 fn bench_quantize(c: &mut Criterion) {
     let mut group = c.benchmark_group("quantize_vec");
 
@@ -67,6 +54,7 @@ fn bench_quantize(c: &mut Criterion) {
     ] {
         let config = make_config(bits, dim);
         let data = pseudo_random_vec(dim, 1000);
+        // qual:allow(BP-010) — criterion idiom: `format!` label + bench_with_input closure is mandated by the library
         let label = format!("tq{bits}_d{dim}");
 
         group.bench_with_input(BenchmarkId::new("polarquant", &label), &data, |b, data| {

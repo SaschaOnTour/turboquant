@@ -5,10 +5,12 @@
 
 #![cfg(feature = "candle")]
 
+// qual:allow(srp) — cohesive integration-test module
 use candle_core::{DType, Device, Tensor};
 use mistralrs_kv_cache::{AttendConfig, CompressedKVCache, DecodeOutput};
 use turboquant::cache::config::QuantNormMode;
 use turboquant::cache::{CacheConfig, PqoCache};
+use turboquant::test_utils::make_kv as shared_make_kv;
 
 const HEAD_DIM: usize = 128;
 const NUM_KV_HEADS: usize = 8;
@@ -27,19 +29,9 @@ fn pqo_config(bits: u8, norm_mode: QuantNormMode) -> CacheConfig {
     }
 }
 
-/// Generate deterministic test data: [1, num_kv_heads, seq_len, head_dim]
-fn make_kv(seq_len: usize, seed: f32) -> (Tensor, Tensor) {
-    let device = Device::Cpu;
-    let n = NUM_KV_HEADS * seq_len * HEAD_DIM;
-    let k_data: Vec<f32> = (0..n)
-        .map(|i| ((i as f32 + seed) * 0.0137).sin() * 2.0)
-        .collect();
-    let v_data: Vec<f32> = (0..n)
-        .map(|i| ((i as f32 + seed + 1000.0) * 0.0213).cos() * 1.5)
-        .collect();
-    let k = Tensor::from_vec(k_data, (1, NUM_KV_HEADS, seq_len, HEAD_DIM), &device).unwrap();
-    let v = Tensor::from_vec(v_data, (1, NUM_KV_HEADS, seq_len, HEAD_DIM), &device).unwrap();
-    (k, v)
+/// Generate deterministic test data: [1, NUM_KV_HEADS, seq_len, HEAD_DIM].
+fn make_kv(seq_len: usize, seed: u32) -> (Tensor, Tensor) {
+    shared_make_kv(seq_len, NUM_KV_HEADS, HEAD_DIM, seed)
 }
 
 /// Dummy query tensor (needed by trait but unused by PQO).
@@ -84,8 +76,8 @@ fn cosine_sim(a: &Tensor, b: &Tensor) -> f32 {
 
 #[test]
 fn pqo3_prefill_returns_original_on_first_call() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
-    let (k, v) = make_kv(8, 1.0);
+    let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+    let (k, v) = make_kv(8, 1);
     let q = make_q(8);
 
     let result = cache.prefill(TEST_LAYER, &k, &v, &q).unwrap();
@@ -105,8 +97,8 @@ fn pqo3_prefill_returns_original_on_first_call() -> candle_core::Result<()> {
 
 #[test]
 fn pqo3_prefill_updates_seq_len() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
-    let (k, v) = make_kv(16, 2.0);
+    let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+    let (k, v) = make_kv(16, 2);
     let q = make_q(16);
 
     assert_eq!(cache.seq_len(TEST_LAYER), 0);
@@ -117,15 +109,15 @@ fn pqo3_prefill_updates_seq_len() -> candle_core::Result<()> {
 
 #[test]
 fn pqo3_decode_returns_dequantized() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+    let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
 
     // Prefill 8 tokens
-    let (k_pre, v_pre) = make_kv(8, 3.0);
+    let (k_pre, v_pre) = make_kv(8, 3);
     let q_pre = make_q(8);
     cache.prefill(TEST_LAYER, &k_pre, &v_pre, &q_pre).unwrap();
 
     // Decode 1 token
-    let (k_dec, v_dec) = make_kv(1, 4.0);
+    let (k_dec, v_dec) = make_kv(1, 4);
     let q_dec = make_q(1);
     let config = AttendConfig {
         softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
@@ -150,14 +142,14 @@ fn pqo3_decode_returns_dequantized() -> candle_core::Result<()> {
 
 #[test]
 fn pqo3_roundtrip_quality_maxnorm() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+    let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
 
     // Prefill 4 tokens, then decode 1 token
-    let (k_pre, v_pre) = make_kv(4, 5.0);
+    let (k_pre, v_pre) = make_kv(4, 5);
     let q = make_q(4);
     cache.prefill(TEST_LAYER, &k_pre, &v_pre, &q).unwrap();
 
-    let (k_dec, v_dec) = make_kv(1, 6.0);
+    let (k_dec, v_dec) = make_kv(1, 6);
     let q_dec = make_q(1);
     let config = AttendConfig {
         softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
@@ -183,13 +175,13 @@ fn pqo3_roundtrip_quality_maxnorm() -> candle_core::Result<()> {
 
 #[test]
 fn pqo3_roundtrip_quality_l2norm() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::L2Norm))?;
+    let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::L2Norm))?;
 
-    let (k_pre, v_pre) = make_kv(4, 7.0);
+    let (k_pre, v_pre) = make_kv(4, 7);
     let q = make_q(4);
     cache.prefill(TEST_LAYER, &k_pre, &v_pre, &q).unwrap();
 
-    let (k_dec, v_dec) = make_kv(1, 8.0);
+    let (k_dec, v_dec) = make_kv(1, 8);
     let q_dec = make_q(1);
     let config = AttendConfig {
         softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
@@ -214,13 +206,13 @@ fn pqo3_roundtrip_quality_l2norm() -> candle_core::Result<()> {
 
 #[test]
 fn pqo4_roundtrip_quality_maxnorm() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(4, QuantNormMode::MaxNorm))?;
+    let cache = PqoCache::new(pqo_config(4, QuantNormMode::MaxNorm))?;
 
-    let (k_pre, v_pre) = make_kv(4, 9.0);
+    let (k_pre, v_pre) = make_kv(4, 9);
     let q = make_q(4);
     cache.prefill(TEST_LAYER, &k_pre, &v_pre, &q).unwrap();
 
-    let (k_dec, v_dec) = make_kv(1, 10.0);
+    let (k_dec, v_dec) = make_kv(1, 10);
     let q_dec = make_q(1);
     let config = AttendConfig {
         softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
@@ -249,8 +241,8 @@ fn pqo4_roundtrip_quality_maxnorm() -> candle_core::Result<()> {
 
 #[test]
 fn pqo3_reset_clears_all_layers() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
-    let (k, v) = make_kv(4, 11.0);
+    let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+    let (k, v) = make_kv(4, 11);
     let q = make_q(4);
 
     cache.prefill(0, &k, &v, &q).unwrap();
@@ -267,9 +259,9 @@ fn pqo3_reset_clears_all_layers() -> candle_core::Result<()> {
 
 #[test]
 fn pqo3_layers_are_independent() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
-    let (k4, v4) = make_kv(4, 12.0);
-    let (k8, v8) = make_kv(8, 13.0);
+    let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+    let (k4, v4) = make_kv(4, 12);
+    let (k8, v8) = make_kv(8, 13);
     let q4 = make_q(4);
     let q8 = make_q(8);
 
@@ -283,10 +275,10 @@ fn pqo3_layers_are_independent() -> candle_core::Result<()> {
 
 #[test]
 fn pqo3_memory_usage_increases_with_tokens() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+    let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
     assert_eq!(cache.memory_usage(), 0);
 
-    let (k, v) = make_kv(16, 14.0);
+    let (k, v) = make_kv(16, 14);
     let q = make_q(16);
     cache.prefill(TEST_LAYER, &k, &v, &q).unwrap();
 
@@ -305,20 +297,20 @@ fn pqo3_memory_usage_increases_with_tokens() -> candle_core::Result<()> {
 
 #[test]
 fn pqo3_multi_step_decode() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+    let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
     let config = AttendConfig {
         softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
         n_kv_groups: 2,
     };
 
     // Prefill 4 tokens
-    let (k_pre, v_pre) = make_kv(4, 15.0);
+    let (k_pre, v_pre) = make_kv(4, 15);
     let q_pre = make_q(4);
     cache.prefill(TEST_LAYER, &k_pre, &v_pre, &q_pre).unwrap();
 
     // Decode 10 tokens one by one
     for step in 0..10 {
-        let (k_dec, v_dec) = make_kv(1, 16.0 + step as f32);
+        let (k_dec, v_dec) = make_kv(1, 16 + step as u32);
         let q_dec = make_q(1);
         let output = cache
             .decode(TEST_LAYER, &k_dec, &v_dec, &q_dec, &config)
@@ -346,14 +338,20 @@ fn pqo3_multi_step_decode() -> candle_core::Result<()> {
 
 #[cfg(feature = "cuda")]
 mod gpu_tests {
-    use super::*;
+    use super::{
+        cosine_sim, make_kv, make_q, pqo_config, BITS, HEAD_DIM, NUM_KV_HEADS, TEST_LAYER,
+    };
+    use candle_core::{DType, Device, Tensor};
+    use mistralrs_kv_cache::{AttendConfig, CompressedKVCache, DecodeOutput};
+    use turboquant::cache::config::QuantNormMode;
+    use turboquant::cache::PqoCache;
 
     fn cuda_device() -> Device {
         Device::cuda_if_available(0).expect("CUDA device required for GPU tests")
     }
 
     /// Generate test data on GPU.
-    fn make_kv_gpu(seq_len: usize, seed: f32) -> (Tensor, Tensor) {
+    fn make_kv_gpu(seq_len: usize, seed: u32) -> (Tensor, Tensor) {
         let (k, v) = make_kv(seq_len, seed);
         let dev = cuda_device();
         (k.to_device(&dev).unwrap(), v.to_device(&dev).unwrap())
@@ -366,15 +364,15 @@ mod gpu_tests {
 
     #[test]
     fn pqo3_gpu_decode_returns_fused() -> candle_core::Result<()> {
-        let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+        let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
 
         // Prefill on GPU
-        let (k_pre, v_pre) = make_kv_gpu(8, 20.0);
+        let (k_pre, v_pre) = make_kv_gpu(8, 20);
         let q_pre = make_q_gpu(8);
         cache.prefill(TEST_LAYER, &k_pre, &v_pre, &q_pre).unwrap();
 
         // Decode 1 token on GPU — should use fused kernel
-        let (k_dec, v_dec) = make_kv_gpu(1, 21.0);
+        let (k_dec, v_dec) = make_kv_gpu(1, 21);
         let q_dec = make_q_gpu(1);
         let config = AttendConfig {
             softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
@@ -413,20 +411,20 @@ mod gpu_tests {
 
     #[test]
     fn pqo3_gpu_multi_step_decode_fused() -> candle_core::Result<()> {
-        let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+        let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
         let config = AttendConfig {
             softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
             n_kv_groups: 2,
         };
 
         // Prefill
-        let (k_pre, v_pre) = make_kv_gpu(4, 22.0);
+        let (k_pre, v_pre) = make_kv_gpu(4, 22);
         let q_pre = make_q_gpu(4);
         cache.prefill(TEST_LAYER, &k_pre, &v_pre, &q_pre).unwrap();
 
         // Decode 5 tokens
         for step in 0..5 {
-            let (k_dec, v_dec) = make_kv_gpu(1, 23.0 + step as f32);
+            let (k_dec, v_dec) = make_kv_gpu(1, 23 + step as u32);
             let q_dec = make_q_gpu(1);
             let output = cache
                 .decode(TEST_LAYER, &k_dec, &v_dec, &q_dec, &config)
@@ -450,31 +448,31 @@ mod gpu_tests {
 
     #[test]
     fn pqo3_gpu_fused_quality_reasonable() -> candle_core::Result<()> {
-        let mut cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+        let cache = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
         let config = AttendConfig {
             softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
             n_kv_groups: 2,
         };
 
         // Prefill + decode on GPU
-        let (k_pre, v_pre) = make_kv_gpu(16, 30.0);
+        let (k_pre, v_pre) = make_kv_gpu(16, 30);
         let q_pre = make_q_gpu(16);
         cache.prefill(TEST_LAYER, &k_pre, &v_pre, &q_pre).unwrap();
 
-        let (k_dec, v_dec) = make_kv_gpu(1, 31.0);
+        let (k_dec, v_dec) = make_kv_gpu(1, 31);
         let q_dec = make_q_gpu(1);
         let output = cache
             .decode(TEST_LAYER, &k_dec, &v_dec, &q_dec, &config)
             .unwrap();
 
         // Also compute dequantized path on CPU for comparison
-        let mut cache_cpu = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
-        let (k_pre_cpu, v_pre_cpu) = make_kv(16, 30.0);
+        let cache_cpu = PqoCache::new(pqo_config(BITS, QuantNormMode::MaxNorm))?;
+        let (k_pre_cpu, v_pre_cpu) = make_kv(16, 30);
         let q_pre_cpu = make_q(16);
         cache_cpu
             .prefill(TEST_LAYER, &k_pre_cpu, &v_pre_cpu, &q_pre_cpu)
             .unwrap();
-        let (k_dec_cpu, v_dec_cpu) = make_kv(1, 31.0);
+        let (k_dec_cpu, v_dec_cpu) = make_kv(1, 31);
         let q_dec_cpu = make_q(1);
         let cpu_output = cache_cpu
             .decode(TEST_LAYER, &k_dec_cpu, &v_dec_cpu, &q_dec_cpu, &config)

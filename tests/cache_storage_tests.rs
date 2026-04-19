@@ -1,19 +1,27 @@
-//! Unit tests for CompressedStorage accessors and common cache helpers.
+//! Unit tests for LayerStorage accessors and common cache helpers.
 //!
-//! Covers: is_active, k_indices, k_scales, v_indices, v_scales, kv_heads,
-//! reset, dequantize_full_impl, dequant_result.
+//! Covers per-layer storage directly (the type exposed to cache impls),
+//! plus a roundtrip integration test through PqoCache.
 
 #![cfg(feature = "candle")]
 
+// qual:allow(srp) — cohesive integration-test module
 use candle_core::{DType, Device, Tensor};
 use mistralrs_kv_cache::CompressedKVCache;
 use turboquant::cache::config::QuantNormMode;
-use turboquant::cache::{CacheConfig, CompressedStorage, PqoCache, QuantizedKV};
+use turboquant::cache::{CacheConfig, LayerStorage, PqoCache, QuantizedKV, StorageMetadata};
 
 const HEAD_DIM: usize = 128;
 const NUM_KV_HEADS: usize = 4;
-const NUM_LAYERS: usize = 2;
 const BITS: u8 = 3;
+
+fn metadata() -> StorageMetadata {
+    StorageMetadata {
+        num_kv_heads: NUM_KV_HEADS,
+        head_dim: HEAD_DIM,
+        bits: BITS,
+    }
+}
 
 fn make_kv(seq_len: usize) -> (Tensor, Tensor) {
     let n = NUM_KV_HEADS * seq_len * HEAD_DIM;
@@ -33,67 +41,51 @@ fn make_q(seq_len: usize) -> Tensor {
     .unwrap()
 }
 
-// -- CompressedStorage tests ------------------------------------------------
+// -- StorageMetadata tests --------------------------------------------------
 
 #[test]
-fn storage_new_is_empty() {
-    let storage = CompressedStorage::new(NUM_KV_HEADS, HEAD_DIM, BITS, NUM_LAYERS);
-    assert_eq!(storage.seq_len(0), 0);
-    assert!(!storage.is_active(0));
-    assert!(storage.k_indices(0).is_none());
-    assert!(storage.k_scales(0).is_none());
-    assert!(storage.v_indices(0).is_none());
-    assert!(storage.v_scales(0).is_none());
+fn metadata_derives_packing_params() {
+    let m = metadata();
+    // packed_dim = head_dim * bits / 8 = 128 * 3 / 8 = 48
+    assert_eq!(m.packed_dim(), 48);
+    // num_blocks = head_dim / 32 = 4
+    assert_eq!(m.num_blocks(), 4);
+}
+
+// -- LayerStorage tests -----------------------------------------------------
+
+#[test]
+fn layer_storage_default_is_empty() {
+    let layer = LayerStorage::default();
+    assert_eq!(layer.seq_len(), 0);
+    assert!(!layer.is_active());
+    assert_eq!(layer.capacity(), 0);
+    assert!(layer.buffers().is_none());
 }
 
 #[test]
-fn storage_after_capacity_and_append() {
-    let mut storage = CompressedStorage::new(NUM_KV_HEADS, HEAD_DIM, BITS, NUM_LAYERS);
-    let packed_dim = storage.packed_dim();
-    let num_blocks = storage.num_blocks();
+fn layer_storage_ensure_capacity_allocates_buffers() {
+    let m = metadata();
+    let mut layer = LayerStorage::default();
+    layer.ensure_capacity(4, &m, &Device::Cpu).unwrap();
+    // Buffers allocated but not yet marked active (append sets active).
+    assert!(!layer.is_active());
+    assert!(layer.capacity() >= 4);
+    assert!(layer.buffers().is_some());
+    // memory_usage reports 0 before any data is appended
+    assert_eq!(layer.memory_usage(&m), 0);
+}
+
+#[test]
+fn layer_storage_append_marks_active_and_updates_seq_len() {
+    let m = metadata();
+    let packed_dim = m.packed_dim();
+    let num_blocks = m.num_blocks();
     let seq = 4;
 
-    storage.ensure_capacity(0, seq, &Device::Cpu).unwrap();
-    // After ensure_capacity but before append, indices exist but is_active is false
-    assert!(!storage.is_active(0));
+    let mut layer = LayerStorage::default();
+    layer.ensure_capacity(seq, &m, &Device::Cpu).unwrap();
 
-    let ki = Tensor::zeros((NUM_KV_HEADS, seq, packed_dim), DType::U8, &Device::Cpu).unwrap();
-    let ks = Tensor::zeros((NUM_KV_HEADS, seq, num_blocks), DType::F16, &Device::Cpu).unwrap();
-    let vi = Tensor::zeros((NUM_KV_HEADS, seq, packed_dim), DType::U8, &Device::Cpu).unwrap();
-    let vs = Tensor::zeros((NUM_KV_HEADS, seq, num_blocks), DType::F16, &Device::Cpu).unwrap();
-    let kv = QuantizedKV {
-        k_indices: &ki,
-        k_scales: &ks,
-        v_indices: &vi,
-        v_scales: &vs,
-    };
-    storage.append(0, 0, &kv, seq).unwrap();
-
-    assert!(storage.is_active(0));
-    assert_eq!(storage.seq_len(0), seq);
-    assert!(storage.k_indices(0).is_some());
-    assert!(storage.k_scales(0).is_some());
-    assert!(storage.v_indices(0).is_some());
-    assert!(storage.v_scales(0).is_some());
-}
-
-#[test]
-fn storage_head_dim_and_bits() {
-    let storage = CompressedStorage::new(NUM_KV_HEADS, HEAD_DIM, BITS, NUM_LAYERS);
-    // packed_dim = head_dim * bits / 8 = 128 * 3 / 8 = 48
-    assert_eq!(storage.packed_dim(), 48);
-    // num_blocks = head_dim / 32 = 4
-    assert_eq!(storage.num_blocks(), 4);
-}
-
-#[test]
-fn storage_reset_clears_all() {
-    let mut storage = CompressedStorage::new(NUM_KV_HEADS, HEAD_DIM, BITS, NUM_LAYERS);
-    let packed_dim = storage.packed_dim();
-    let num_blocks = storage.num_blocks();
-    let seq = 2;
-
-    storage.ensure_capacity(0, seq, &Device::Cpu).unwrap();
     let ki = Tensor::zeros((NUM_KV_HEADS, seq, packed_dim), DType::U8, &Device::Cpu).unwrap();
     let ks = Tensor::zeros((NUM_KV_HEADS, seq, num_blocks), DType::F16, &Device::Cpu).unwrap();
     let vi = ki.clone();
@@ -104,24 +96,113 @@ fn storage_reset_clears_all() {
         v_indices: &vi,
         v_scales: &vs,
     };
-    storage.append(0, 0, &kv, seq).unwrap();
-    assert!(storage.is_active(0));
+    layer.append(0, &kv, seq).unwrap();
 
-    storage.reset();
-    assert!(!storage.is_active(0));
-    assert_eq!(storage.seq_len(0), 0);
-    assert!(storage.k_indices(0).is_none());
+    assert!(layer.is_active());
+    assert_eq!(layer.seq_len(), seq);
+    // memory usage now positive
+    assert!(layer.memory_usage(&m) > 0);
 }
 
-// -- dequantize_full_impl via PqoCache roundtrip ----------------------------
+#[test]
+fn layer_storage_validate_rejects_inconsistent_state() {
+    // Consistent: default is valid.
+    let default_layer = LayerStorage::default();
+    default_layer.validate().unwrap();
+
+    // Consistent: populated layer is valid.
+    let m = metadata();
+    let mut layer = LayerStorage::default();
+    layer.ensure_capacity(2, &m, &Device::Cpu).unwrap();
+    let ki = Tensor::zeros((NUM_KV_HEADS, 2, m.packed_dim()), DType::U8, &Device::Cpu).unwrap();
+    let ks = Tensor::zeros((NUM_KV_HEADS, 2, m.num_blocks()), DType::F16, &Device::Cpu).unwrap();
+    let kv = QuantizedKV {
+        k_indices: &ki,
+        k_scales: &ks,
+        v_indices: &ki,
+        v_scales: &ks,
+    };
+    layer.append(0, &kv, 2).unwrap();
+    layer.validate().unwrap();
+}
+
+#[test]
+fn layer_storage_reset_clears_state() {
+    let m = metadata();
+    let packed_dim = m.packed_dim();
+    let num_blocks = m.num_blocks();
+    let seq = 2;
+
+    let mut layer = LayerStorage::default();
+    layer.ensure_capacity(seq, &m, &Device::Cpu).unwrap();
+    let ki = Tensor::zeros((NUM_KV_HEADS, seq, packed_dim), DType::U8, &Device::Cpu).unwrap();
+    let ks = Tensor::zeros((NUM_KV_HEADS, seq, num_blocks), DType::F16, &Device::Cpu).unwrap();
+    let kv = QuantizedKV {
+        k_indices: &ki,
+        k_scales: &ks,
+        v_indices: &ki,
+        v_scales: &ks,
+    };
+    layer.append(0, &kv, seq).unwrap();
+    assert!(layer.is_active());
+
+    layer.reset();
+    assert!(!layer.is_active());
+    assert_eq!(layer.seq_len(), 0);
+    assert!(layer.buffers().is_none());
+}
+
+#[test]
+fn layer_storage_ensure_capacity_preserves_old_data_on_growth() {
+    let m = metadata();
+    let packed_dim = m.packed_dim();
+    let num_blocks = m.num_blocks();
+    let seq = 2;
+
+    let mut layer = LayerStorage::default();
+    layer.ensure_capacity(seq, &m, &Device::Cpu).unwrap();
+
+    // Append distinguishable data: ones.
+    let ki = Tensor::ones((NUM_KV_HEADS, seq, packed_dim), DType::U8, &Device::Cpu).unwrap();
+    let ks = Tensor::ones((NUM_KV_HEADS, seq, num_blocks), DType::F16, &Device::Cpu).unwrap();
+    let kv = QuantizedKV {
+        k_indices: &ki,
+        k_scales: &ks,
+        v_indices: &ki,
+        v_scales: &ks,
+    };
+    layer.append(0, &kv, seq).unwrap();
+
+    // Grow capacity.
+    layer.ensure_capacity(seq + 100, &m, &Device::Cpu).unwrap();
+    assert!(layer.capacity() >= seq + 100);
+    // Old data at positions 0..seq should be preserved (all ones).
+    let preserved = layer
+        .buffers()
+        .unwrap()
+        .k_indices
+        .narrow(1, 0, seq)
+        .unwrap()
+        .to_vec3::<u8>()
+        .unwrap();
+    for head in &preserved {
+        for row in head {
+            for &byte in row {
+                assert_eq!(byte, 1, "old data lost after capacity growth");
+            }
+        }
+    }
+}
+
+// -- Roundtrip integration test --------------------------------------------
 
 #[test]
 fn dequantize_full_roundtrip_produces_output() -> candle_core::Result<()> {
-    let mut cache = PqoCache::new(CacheConfig {
+    let cache = PqoCache::new(CacheConfig {
         bits: BITS,
         head_dim: HEAD_DIM,
         num_kv_heads: NUM_KV_HEADS,
-        num_layers: NUM_LAYERS,
+        num_layers: 2,
         norm_mode: QuantNormMode::MaxNorm,
         outlier_blocks: usize::MAX,
     })?;

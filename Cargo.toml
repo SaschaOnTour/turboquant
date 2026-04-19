@@ -1,6 +1,6 @@
 [package]
 name = "turboquant-rs"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 authors = ["Sascha <sascha@privora.com>"]
 description = "TurboQuant KV-Cache Quantization — 3-bit compression with zero accuracy loss (Zandieh et al., ICLR 2026)"
@@ -25,9 +25,10 @@ cuda = ["candle", "dep:cudaforge", "candle-core/cuda"]
 [dependencies]
 half = "2"
 thiserror = "2"
+parking_lot = "0.12"
 serde = { version = "1", features = ["derive"], optional = true }
 candle-core = { version = ">=0.10.2", optional = true }
-mistralrs-kv-cache = { version = ">=0.2.0", optional = true }
+mistralrs-kv-cache = { version = ">=0.3.0", optional = true }
 
 [build-dependencies]
 cudaforge = { version = "0.1.2", optional = true }

@@ -1,8 +1,9 @@
 //! Compressed GPU tensor storage for KV-cache indices and scales.
 //!
-//! [`CompressedStorage`] manages the per-layer GPU buffers that hold
-//! bit-packed quantization indices and per-block scale factors.
-//! Handles capacity growth (25% + 128 headroom) and slice-set operations.
+//! [`LayerStorage`] holds one layer's GPU buffers; outer caches wrap it in
+//! per-layer locks so different layers can be written concurrently (needed
+//! for speculative decoding). [`StorageMetadata`] carries the immutable
+//! shape/packing metadata shared across all layers.
 
 use candle_core::{DType, Device, Result, Tensor};
 
@@ -17,51 +18,15 @@ pub struct QuantizedKV<'a> {
     pub v_scales: &'a Tensor,
 }
 
-/// Per-layer GPU tensor storage for compressed KV-cache data.
-///
-/// Fields are kept minimal (SRP): only indices, scales, and bookkeeping.
-/// QJL data lives in a separate `QjlStorage` struct.
-pub struct CompressedStorage {
-    pub(crate) num_kv_heads: usize,
-    pub(crate) head_dim: usize,
-    pub(crate) bits: u8,
-    num_layers: usize,
-    buf_seq_len: Vec<usize>,
-    gpu_k_indices: Vec<Option<Tensor>>,
-    gpu_v_indices: Vec<Option<Tensor>>,
-    gpu_k_scales: Vec<Option<Tensor>>,
-    gpu_v_scales: Vec<Option<Tensor>>,
-    gpu_path_active: Vec<bool>,
+/// Read-only storage metadata shared across all layers.
+#[derive(Clone, Copy)]
+pub struct StorageMetadata {
+    pub num_kv_heads: usize,
+    pub head_dim: usize,
+    pub bits: u8,
 }
 
-impl CompressedStorage {
-    /// Create empty storage for the given configuration.
-    pub fn new(num_kv_heads: usize, head_dim: usize, bits: u8, num_layers: usize) -> Self {
-        Self {
-            num_kv_heads,
-            head_dim,
-            bits,
-            num_layers,
-            buf_seq_len: vec![0; num_layers],
-            gpu_k_indices: vec![None; num_layers],
-            gpu_v_indices: vec![None; num_layers],
-            gpu_k_scales: vec![None; num_layers],
-            gpu_v_scales: vec![None; num_layers],
-            gpu_path_active: vec![false; num_layers],
-        }
-    }
-
-    /// Current sequence length for a layer.
-    pub fn seq_len(&self, layer: usize) -> usize {
-        self.buf_seq_len[layer]
-    }
-
-    /// Whether the GPU path is active for a layer (has data stored).
-    // qual:allow(TQ-003) — tested via cache_storage_tests
-    pub fn is_active(&self, layer: usize) -> bool {
-        self.gpu_path_active[layer] && self.buf_seq_len[layer] > 0
-    }
-
+impl StorageMetadata {
     /// Packed dimension: bytes per token for indices.
     pub fn packed_dim(&self) -> usize {
         self.head_dim * self.bits as usize / BITS_PER_BYTE
@@ -71,42 +36,85 @@ impl CompressedStorage {
     pub fn num_blocks(&self) -> usize {
         self.head_dim / QUANT_BLOCK_SIZE
     }
+}
 
-    /// Access key indices tensor for a layer (for fused kernel).
+/// Borrowed view over a layer's four GPU tensor buffers.
+///
+/// Returned by [`LayerStorage::buffers`] — holds the K/V indices and scales
+/// that every decode and dequantize operation reads together.
+pub struct LayerBuffers<'a> {
+    pub k_indices: &'a Tensor,
+    pub k_scales: &'a Tensor,
+    pub v_indices: &'a Tensor,
+    pub v_scales: &'a Tensor,
+}
+
+/// GPU tensor storage for a single transformer layer.
+///
+/// All per-layer fields are grouped here so an outer cache can wrap one lock
+/// per layer (`Mutex<LayerStorage>`) to allow parallel access across layers.
+// qual:allow(srp) — cohesive per-layer GPU storage: readers and mutators
+// operate on the same (buf_seq_len, gpu_*, gpu_path_active) state; see
+// docs/rustqual-bugs.md for the LCOM4=2 false-positive report.
+#[derive(Default)]
+pub struct LayerStorage {
+    pub(crate) buf_seq_len: usize,
+    pub(crate) gpu_k_indices: Option<Tensor>,
+    pub(crate) gpu_v_indices: Option<Tensor>,
+    pub(crate) gpu_k_scales: Option<Tensor>,
+    pub(crate) gpu_v_scales: Option<Tensor>,
+    pub(crate) gpu_path_active: bool,
+}
+
+impl LayerStorage {
+    /// Current sequence length.
     // qual:allow(TQ-003) — tested via cache_storage_tests
-    pub fn k_indices(&self, layer: usize) -> Option<&Tensor> {
-        self.gpu_k_indices[layer].as_ref()
+    pub fn seq_len(&self) -> usize {
+        self.buf_seq_len
     }
 
-    /// Access key scales tensor for a layer (for fused kernel).
+    /// Whether the GPU path is active (has data stored).
     // qual:allow(TQ-003) — tested via cache_storage_tests
-    pub fn k_scales(&self, layer: usize) -> Option<&Tensor> {
-        self.gpu_k_scales[layer].as_ref()
+    pub fn is_active(&self) -> bool {
+        self.gpu_path_active && self.buf_seq_len > 0
     }
 
-    /// Access value indices tensor for a layer.
+    /// Allocated capacity (max seq_len before realloc).
     // qual:allow(TQ-003) — tested via cache_storage_tests
-    pub fn v_indices(&self, layer: usize) -> Option<&Tensor> {
-        self.gpu_v_indices[layer].as_ref()
+    pub fn capacity(&self) -> usize {
+        self.gpu_k_indices.as_ref().map_or(0, |t| t.dims()[1])
     }
 
-    /// Access value scales tensor for a layer.
+    /// Borrow the four GPU tensors as a group. Returns `None` if any buffer
+    /// is not yet allocated (i.e. `ensure_capacity` has not been called).
     // qual:allow(TQ-003) — tested via cache_storage_tests
-    pub fn v_scales(&self, layer: usize) -> Option<&Tensor> {
-        self.gpu_v_scales[layer].as_ref()
-    }
-
-    /// Allocated capacity (max seq_len before realloc) for a layer.
-    pub fn capacity(&self, layer: usize) -> usize {
-        self.gpu_k_indices[layer]
-            .as_ref()
-            .map_or(0, |t| t.dims()[1])
+    pub fn buffers(&self) -> Option<LayerBuffers<'_>> {
+        match (
+            self.gpu_k_indices.as_ref(),
+            self.gpu_k_scales.as_ref(),
+            self.gpu_v_indices.as_ref(),
+            self.gpu_v_scales.as_ref(),
+        ) {
+            (Some(ki), Some(ks), Some(vi), Some(vs)) => Some(LayerBuffers {
+                k_indices: ki,
+                k_scales: ks,
+                v_indices: vi,
+                v_scales: vs,
+            }),
+            _ => None,
+        }
     }
 
     /// Ensure buffers have capacity for at least `needed` tokens.
     /// Grows by 25% + 128 tokens headroom (not doubling — saves VRAM).
-    pub fn ensure_capacity(&mut self, layer: usize, needed: usize, device: &Device) -> Result<()> {
-        let current_cap = self.capacity(layer);
+    // qual:allow(TQ-003) — tested via cache_storage_tests
+    pub fn ensure_capacity(
+        &mut self,
+        needed: usize,
+        metadata: &StorageMetadata,
+        device: &Device,
+    ) -> Result<()> {
+        let current_cap = self.capacity();
         if current_cap >= needed {
             return Ok(());
         }
@@ -114,91 +122,103 @@ impl CompressedStorage {
         const MIN_HEADROOM: usize = 128;
         let grow = (needed / 4).max(MIN_HEADROOM);
         let new_cap = needed + grow;
-        let old_seq = self.buf_seq_len[layer];
-        let heads = self.num_kv_heads;
-        let packed_dim = self.packed_dim();
-        let num_blocks = self.num_blocks();
+        let heads = metadata.num_kv_heads;
+        let packed_dim = metadata.packed_dim();
+        let num_blocks = metadata.num_blocks();
 
         let new_ki = Tensor::zeros((heads, new_cap, packed_dim), DType::U8, device)?;
         let new_vi = Tensor::zeros((heads, new_cap, packed_dim), DType::U8, device)?;
         let new_ks = Tensor::zeros((heads, new_cap, num_blocks), DType::F16, device)?;
         let new_vs = Tensor::zeros((heads, new_cap, num_blocks), DType::F16, device)?;
 
+        let old_seq = self.buf_seq_len;
         if old_seq > 0 {
-            copy_old_data(&self.gpu_k_indices[layer], &new_ki, old_seq)?;
-            copy_old_data(&self.gpu_v_indices[layer], &new_vi, old_seq)?;
-            copy_old_data(&self.gpu_k_scales[layer], &new_ks, old_seq)?;
-            copy_old_data(&self.gpu_v_scales[layer], &new_vs, old_seq)?;
+            copy_old_data(&self.gpu_k_indices, &new_ki, old_seq)?;
+            copy_old_data(&self.gpu_v_indices, &new_vi, old_seq)?;
+            copy_old_data(&self.gpu_k_scales, &new_ks, old_seq)?;
+            copy_old_data(&self.gpu_v_scales, &new_vs, old_seq)?;
         }
 
-        self.gpu_k_indices[layer] = Some(new_ki);
-        self.gpu_v_indices[layer] = Some(new_vi);
-        self.gpu_k_scales[layer] = Some(new_ks);
-        self.gpu_v_scales[layer] = Some(new_vs);
+        self.gpu_k_indices = Some(new_ki);
+        self.gpu_v_indices = Some(new_vi);
+        self.gpu_k_scales = Some(new_ks);
+        self.gpu_v_scales = Some(new_vs);
         Ok(())
     }
 
     /// Append new quantized data at the given offset.
-    ///
-    /// `k_idx`/`v_idx` shape: `[num_kv_heads, new_seq_len, packed_dim]`
-    /// `k_sc`/`v_sc` shape: `[num_kv_heads, new_seq_len, num_blocks]`
+    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn append(
         &mut self,
-        layer: usize,
         offset: usize,
         kv: &QuantizedKV<'_>,
         new_seq_len: usize,
     ) -> Result<()> {
-        self.gpu_k_indices[layer]
+        self.gpu_k_indices
             .as_ref()
             .ok_or_else(|| cache_err("k_indices buffer not allocated"))?
             .slice_set(kv.k_indices, 1, offset)?;
-        self.gpu_v_indices[layer]
+        self.gpu_v_indices
             .as_ref()
             .ok_or_else(|| cache_err("v_indices buffer not allocated"))?
             .slice_set(kv.v_indices, 1, offset)?;
-        self.gpu_k_scales[layer]
+        self.gpu_k_scales
             .as_ref()
             .ok_or_else(|| cache_err("k_scales buffer not allocated"))?
             .slice_set(kv.k_scales, 1, offset)?;
-        self.gpu_v_scales[layer]
+        self.gpu_v_scales
             .as_ref()
             .ok_or_else(|| cache_err("v_scales buffer not allocated"))?
             .slice_set(kv.v_scales, 1, offset)?;
 
-        self.buf_seq_len[layer] = offset + new_seq_len;
-        self.gpu_path_active[layer] = true;
+        self.buf_seq_len = offset + new_seq_len;
+        self.gpu_path_active = true;
+        debug_assert!(
+            self.validate().is_ok(),
+            "post-append state must satisfy LayerStorage invariants"
+        );
         Ok(())
     }
 
-    /// Reset all layers to empty state.
+    /// Reset this layer to empty state.
     // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn reset(&mut self) {
-        for layer in 0..self.num_layers {
-            self.gpu_k_indices[layer] = None;
-            self.gpu_v_indices[layer] = None;
-            self.gpu_k_scales[layer] = None;
-            self.gpu_v_scales[layer] = None;
-            self.gpu_path_active[layer] = false;
-            self.buf_seq_len[layer] = 0;
-        }
+        *self = Self::default();
     }
 
-    /// Estimated persistent memory usage in bytes across all layers.
-    pub fn memory_usage(&self) -> usize {
-        let mut total = 0;
-        for layer in 0..self.num_layers {
-            let seq = self.buf_seq_len[layer];
-            if seq == 0 {
-                continue;
-            }
-            let packed_dim = self.packed_dim();
-            let num_blocks = self.num_blocks();
-            // K + V indices (U8) + K + V scales (F16 = 2 bytes)
-            total += 2 * self.num_kv_heads * seq * packed_dim;
-            total += 2 * self.num_kv_heads * seq * num_blocks * 2;
+    /// Verify all internal invariants. Returns an error if the storage is
+    /// in an inconsistent state (e.g. active flag disagrees with the buffer
+    /// allocation).
+    // qual:allow(TQ-003) — tested via cache_storage_tests
+    pub fn validate(&self) -> Result<()> {
+        if self.gpu_path_active && self.buf_seq_len == 0 {
+            return Err(cache_err(
+                "active flag set but buf_seq_len is 0 — inconsistent state",
+            ));
         }
-        total
+        if self.gpu_path_active {
+            if self.gpu_k_indices.is_none() || self.gpu_v_indices.is_none() {
+                return Err(cache_err("active layer missing K/V indices buffer"));
+            }
+            if self.gpu_k_scales.is_none() || self.gpu_v_scales.is_none() {
+                return Err(cache_err("active layer missing K/V scales buffer"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Estimated persistent memory usage in bytes for this layer.
+    // qual:allow(TQ-003) — tested via cache_storage_tests
+    pub fn memory_usage(&self, metadata: &StorageMetadata) -> usize {
+        let seq = self.buf_seq_len;
+        if seq == 0 {
+            return 0;
+        }
+        let packed_dim = metadata.packed_dim();
+        let num_blocks = metadata.num_blocks();
+        // K + V indices (U8) + K + V scales (F16 = 2 bytes)
+        2 * metadata.num_kv_heads * seq * packed_dim
+            + 2 * metadata.num_kv_heads * seq * num_blocks * 2
     }
 }
 

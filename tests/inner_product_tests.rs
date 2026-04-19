@@ -3,6 +3,7 @@
 //! Tests the end-to-end unbiasedness and variance properties of the
 //! TURBOQUANTprod algorithm (Algorithm 2) across many random vector pairs.
 
+// qual:allow(srp) — cohesive integration-test module
 use turboquant::packed::TurboQuantConfig;
 use turboquant::qjl::{dot_product, estimate_inner_product_single, quantize_with_qjl};
 
@@ -31,15 +32,6 @@ const BIAS_TOLERANCE: f32 = 0.02;
 /// Maximum acceptable relative variance.
 const MAX_RELATIVE_VARIANCE: f64 = 2.0;
 
-/// LCG multiplier for pseudo-random vector generation.
-const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
-
-/// LCG increment for pseudo-random vector generation.
-const LCG_INCREMENT: u64 = 1;
-
-/// Right-shift for extracting bits from LCG state.
-const LCG_SHIFT: u32 = 33;
-
 /// Overall bit budget (3-bit: 2-bit polar + 1-bit QJL).
 const BITS_3: u8 = 3;
 
@@ -49,23 +41,7 @@ const KEY_SEED_OFFSET: u64 = 1000;
 /// Query seed offset to separate key and query generation.
 const QUERY_SEED_OFFSET: u64 = 2000;
 
-// ---------------------------------------------------------------------------
-// Helper: deterministic pseudo-random vector
-// ---------------------------------------------------------------------------
-
-/// Returns a deterministic pseudo-random vector of length `dim`.
-fn pseudo_random_vec(dim: usize, seed: u64) -> Vec<f32> {
-    let mut state = seed;
-    (0..dim)
-        .map(|_| {
-            state = state
-                .wrapping_mul(LCG_MULTIPLIER)
-                .wrapping_add(LCG_INCREMENT);
-            let bits = (state >> LCG_SHIFT) as i32;
-            bits as f32 / (i32::MAX as f32)
-        })
-        .collect()
-}
+use turboquant::test_utils::{pseudo_random_vec, LCG_MULTIPLIER};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -117,8 +93,10 @@ fn qjl_inner_product_bias_quick() {
         .unwrap()
         .with_seed(ROTATION_SEED);
 
+    /// Looser tolerance for the quick (small-sample) bias test.
+    const QUICK_BIAS_TOLERANCE: f32 = 0.1;
     let mut bias_sum = 0.0_f64;
-    let looser_tolerance: f32 = 0.1; // looser for smaller sample
+    let looser_tolerance: f32 = QUICK_BIAS_TOLERANCE;
 
     for i in 0..QUICK_SAMPLE_COUNT {
         let key_seed = (i as u64)
@@ -238,6 +216,7 @@ const E2E_ROTATION_SEED: u64 = 42;
 /// End-to-end test: push 100 KV pairs through QuantizedKVCache, then verify
 /// that attention scores are unbiased and have bounded error relative to the
 /// true dot products.
+// qual:allow(complexity) — single coherent end-to-end bias + MSE assertion; splitting would require duplicating the 100-sample setup
 #[test]
 fn e2e_kv_cache_attention_scores_unbiased() {
     let config = TurboQuantConfig::new(BITS_3, E2E_DIM)

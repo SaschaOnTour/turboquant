@@ -1,3 +1,4 @@
+// qual:allow(srp) — cohesive integration-test module
 use approx::assert_relative_eq;
 use turboquant::codebook::{beta_pdf, generate_codebook, get_codebook, nearest_centroid, Codebook};
 
@@ -284,10 +285,14 @@ fn generated_matches_precomputed_4bit_d64() {
 // Beta PDF sanity
 // ---------------------------------------------------------------------------
 
+/// Number of Simpson-rule sub-intervals used to integrate the Beta PDF
+/// over [-1, 1]. 2048 gives epsilon=1e-4 accuracy across d=64..256.
+const BETA_SIMPSON_STEPS: usize = 2048;
+
 #[test]
 fn beta_pdf_integrates_to_one() {
     for d in [64, 128, 256] {
-        let n = 2048_usize;
+        let n = BETA_SIMPSON_STEPS;
         let h = 2.0 / n as f64;
         let mut sum = beta_pdf(-1.0, d) + beta_pdf(1.0, d);
         for i in 1..n {
@@ -302,8 +307,10 @@ fn beta_pdf_integrates_to_one() {
 
 #[test]
 fn beta_pdf_symmetric() {
+    /// Representative x-values for the symmetry check.
+    const SYMMETRY_SAMPLE_POINTS: [f64; 5] = [0.0, 0.1, 0.3, 0.5, 0.9];
     for d in [64, 128, 256] {
-        for &x in &[0.0, 0.1, 0.3, 0.5, 0.9] {
+        for &x in &SYMMETRY_SAMPLE_POINTS {
             assert_relative_eq!(beta_pdf(x, d), beta_pdf(-x, d), epsilon = 1e-12);
         }
     }

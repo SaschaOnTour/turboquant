@@ -5,6 +5,7 @@
 //!
 //! Run with: `cargo test --release -- --ignored`
 
+// qual:allow(srp) — cohesive integration-test module
 use turboquant::packed::TurboQuantConfig;
 use turboquant::quantize::{dequantize_vec, quantize_vec};
 
@@ -57,9 +58,11 @@ impl Lcg {
 
     /// Box-Muller transform: returns two independent standard normal samples.
     fn next_normal_pair(&mut self) -> (f64, f64) {
+        /// Box-Muller multiplier: `r = sqrt(-2 · ln(U1))`.
+        const BOX_MULLER_MULT: f64 = -2.0;
         let u1 = self.next_uniform();
         let u2 = self.next_uniform();
-        let r = (-2.0 * u1.ln()).sqrt();
+        let r = (BOX_MULLER_MULT * u1.ln()).sqrt();
         let theta = TWO_PI * u2;
         (r * theta.cos(), r * theta.sin())
     }
@@ -332,26 +335,7 @@ const TQ4_D128_MIN_COMPRESSION: f32 = 3.0;
 /// Minimum compression ratio for TQ4, d=256.
 const TQ4_D256_MIN_COMPRESSION: f32 = 3.5;
 
-/// LCG multiplier for compression test vectors.
-const COMP_LCG_MUL: u64 = 6_364_136_223_846_793_005;
-
-/// LCG increment for compression test vectors.
-const COMP_LCG_INC: u64 = 1;
-
-/// LCG right-shift for compression test vectors.
-const COMP_LCG_SHIFT: u32 = 33;
-
-/// Returns a deterministic pseudo-random vector of length `dim` (LCG-based).
-fn compression_random_vec(dim: usize, seed: u64) -> Vec<f32> {
-    let mut state = seed;
-    (0..dim)
-        .map(|_| {
-            state = state.wrapping_mul(COMP_LCG_MUL).wrapping_add(COMP_LCG_INC);
-            let bits = (state >> COMP_LCG_SHIFT) as i32;
-            bits as f32 / (i32::MAX as f32)
-        })
-        .collect()
-}
+use turboquant::test_utils::pseudo_random_vec as compression_random_vec;
 
 /// Measures the compression ratio for a given (bits, dim) configuration.
 fn measure_compression_ratio(bits: u8, dim: usize) -> f32 {

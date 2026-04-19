@@ -4,50 +4,66 @@ use candle_core::{DType, Result, Tensor};
 use mistralrs_kv_cache::DequantResult;
 
 use super::cache_err;
-use super::config::CacheConfig;
+use super::config::{CacheConfig, QUANT_BLOCK_SIZE};
 use super::precomputed::GpuPrecomputed;
 use super::quantize_tensor::{polar_dequantize, QuantConfig};
-use super::storage::CompressedStorage;
+use super::storage::{LayerStorage, StorageMetadata};
 
-/// Dequantize the full compressed cache for a layer.
+/// Validate `config.head_dim` is divisible by `QUANT_BLOCK_SIZE` and return
+/// the derived read-only `StorageMetadata`.
+///
+/// Used by both `PqoCache::new` and `TqCache::new` to share the divisibility
+/// check and metadata construction.
+pub(crate) fn validate_and_make_metadata(config: &CacheConfig) -> Result<StorageMetadata> {
+    if config.head_dim % QUANT_BLOCK_SIZE != 0 {
+        candle_core::bail!(
+            "head_dim ({}) must be divisible by QUANT_BLOCK_SIZE ({QUANT_BLOCK_SIZE}). \
+             Models with head_dim={} are not supported by TurboQuant compression.",
+            config.head_dim,
+            config.head_dim
+        );
+    }
+    Ok(StorageMetadata {
+        num_kv_heads: config.num_kv_heads,
+        head_dim: config.head_dim,
+        bits: config.bits,
+    })
+}
+
+/// Dequantize the full compressed cache for a single layer slot.
 ///
 /// Shared implementation used by both `PqoCache` and `TqCache`.
 // qual:allow(TQ-003) — tested via cache_pqo_tests + cache_storage_tests integration tests
 pub(crate) fn dequantize_full_impl(
-    storage: &CompressedStorage,
+    layer: &LayerStorage,
+    metadata: &StorageMetadata,
     config: &QuantConfig<'_>,
-    layer: usize,
     orig_dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
-    let total_seq = storage.seq_len(layer);
-    let head_dim = storage.head_dim;
-    let num_kv_heads = storage.num_kv_heads;
-    let packed_dim = storage.packed_dim();
-    let num_blocks = storage.num_blocks();
+    let total_seq = layer.seq_len();
+    let head_dim = metadata.head_dim;
+    let num_kv_heads = metadata.num_kv_heads;
+    let packed_dim = metadata.packed_dim();
+    let num_blocks = metadata.num_blocks();
 
-    let ki = storage
-        .k_indices(layer)
-        .ok_or_else(|| cache_err("k_indices not initialized"))?;
-    let ks = storage
-        .k_scales(layer)
-        .ok_or_else(|| cache_err("k_scales not initialized"))?;
-    let vi = storage
-        .v_indices(layer)
-        .ok_or_else(|| cache_err("v_indices not initialized"))?;
-    let vs = storage
-        .v_scales(layer)
-        .ok_or_else(|| cache_err("v_scales not initialized"))?;
+    let bufs = layer
+        .buffers()
+        .ok_or_else(|| cache_err("layer buffers not initialized"))?;
 
-    let all_ki = ki
+    let all_ki = bufs
+        .k_indices
         .narrow(1, 0, total_seq)?
         .reshape((num_kv_heads * total_seq, packed_dim))?;
-    let all_ks = ks
+    let all_ks = bufs
+        .k_scales
         .narrow(1, 0, total_seq)?
         .reshape((num_kv_heads * total_seq, num_blocks))?;
-    let all_vi = vi
+    let all_vi = bufs
+        .v_indices
         .narrow(1, 0, total_seq)?
         .reshape((num_kv_heads * total_seq, packed_dim))?;
-    let all_vs = vs
+    let all_vs = bufs
+        .v_scales
         .narrow(1, 0, total_seq)?
         .reshape((num_kv_heads * total_seq, num_blocks))?;
 
@@ -63,18 +79,15 @@ pub(crate) fn dequantize_full_impl(
 
 /// Build a [`QuantConfig`] from precomputed tensors and cache configuration.
 pub(crate) fn make_quant_config<'a>(
-    precomputed: &'a Option<GpuPrecomputed>,
+    precomputed: &'a GpuPrecomputed,
     config: &CacheConfig,
-) -> Result<QuantConfig<'a>> {
-    let pre = precomputed
-        .as_ref()
-        .ok_or_else(|| cache_err("precomputed not initialized"))?;
-    Ok(QuantConfig {
+) -> QuantConfig<'a> {
+    QuantConfig {
         head_dim: config.head_dim,
         bits: config.bits,
         outlier_blocks: config.outlier_blocks,
-        pre,
-    })
+        pre: precomputed,
+    }
 }
 
 /// Flatten K/V tensors from `[1, heads, seq, dim]` to `[heads*seq, dim]` as f32.
