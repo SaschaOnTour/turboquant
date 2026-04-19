@@ -3,8 +3,6 @@
 //! All blocks use the outlier (higher-bit) codebook — the recommended mode
 //! for production use. Implements [`CompressedKVCache`] from `mistralrs-kv-cache`.
 
-use std::sync::OnceLock;
-
 use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_kv_cache::{AttendConfig, CompressedKVCache, DecodeOutput, DequantResult};
 use parking_lot::Mutex;
@@ -15,9 +13,9 @@ use super::common::{
     validate_and_make_metadata,
 };
 use super::config::{CacheConfig, QUANT_BLOCK_SIZE};
-use super::ensure_gpu_precomputed;
 use super::precomputed::GpuPrecomputed;
 use super::storage::{LayerStorage, QuantizedKV, StorageMetadata};
+use super::{ensure_gpu_precomputed, PrecomputedState};
 
 /// PolarQuant Outlier (PQO) compressed KV-cache.
 ///
@@ -27,7 +25,7 @@ use super::storage::{LayerStorage, QuantizedKV, StorageMetadata};
 pub struct PqoCache {
     config: CacheConfig,
     metadata: StorageMetadata,
-    precomputed: OnceLock<GpuPrecomputed>,
+    precomputed: PrecomputedState,
     layers: Vec<Mutex<LayerStorage>>,
 }
 
@@ -43,7 +41,7 @@ impl PqoCache {
         Ok(Self {
             config,
             metadata,
-            precomputed: OnceLock::new(),
+            precomputed: PrecomputedState::default(),
             layers,
         })
     }
@@ -155,13 +153,24 @@ impl PqoCache {
         let qc = make_quant_config(pre, &self.config);
         dequantize_full_impl(layer_slot, &self.metadata, &qc, orig_dtype)
     }
+
+    /// Borrow-check `layer` and return the per-layer mutex. Returns a
+    /// `candle_core::Error` instead of panicking when `layer >= num_layers`.
+    fn layer_mutex(&self, layer: usize) -> Result<&Mutex<LayerStorage>> {
+        self.layers.get(layer).ok_or_else(|| {
+            super::cache_err(format!(
+                "layer index {layer} out of range (cache has {} layers)",
+                self.layers.len()
+            ))
+        })
+    }
 }
 
 impl CompressedKVCache for PqoCache {
     fn prefill(&self, layer: usize, k: &Tensor, v: &Tensor, _q: &Tensor) -> Result<DequantResult> {
         let orig_dtype = k.dtype();
         let pre = ensure_gpu_precomputed(&self.precomputed, &self.config, k.device())?;
-        let mut guard = self.layers[layer].lock();
+        let mut guard = self.layer_mutex(layer)?.lock();
         let (old_seq_len, _total) = self.quantize_and_store(&mut guard, k, v, pre)?;
 
         if old_seq_len == 0 {
@@ -183,7 +192,7 @@ impl CompressedKVCache for PqoCache {
         let device = k.device().clone();
         let orig_dtype = k.dtype();
         let pre = ensure_gpu_precomputed(&self.precomputed, &self.config, &device)?;
-        let mut guard = self.layers[layer].lock();
+        let mut guard = self.layer_mutex(layer)?.lock();
         self.quantize_and_store(&mut guard, k, v, pre)?;
 
         #[cfg(feature = "cuda")]
@@ -197,8 +206,14 @@ impl CompressedKVCache for PqoCache {
         Ok(DecodeOutput::Dequantized(dequant_result(full_k, full_v)))
     }
 
+    /// Returns 0 for out-of-range `layer` rather than panicking — the trait
+    /// signature is infallible so callers cannot distinguish "not yet
+    /// populated" from "invalid index" anyway.
     fn seq_len(&self, layer: usize) -> usize {
-        self.layers[layer].lock().seq_len()
+        self.layers
+            .get(layer)
+            .map(|m| m.lock().seq_len())
+            .unwrap_or(0)
     }
 
     fn reset(&self) -> Result<()> {

@@ -4,8 +4,6 @@
 //! Uses standard codebook (outlier_blocks=0) plus QJL bias correction
 //! to achieve unbiased inner-product estimates.
 
-use std::sync::OnceLock;
-
 use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_kv_cache::{AttendConfig, CompressedKVCache, DecodeOutput, DequantResult};
 use parking_lot::Mutex;
@@ -16,10 +14,10 @@ use super::common::{
     validate_and_make_metadata,
 };
 use super::config::{CacheConfig, BITS_PER_BYTE, DEFAULT_QJL_SEED};
-use super::ensure_gpu_precomputed;
 use super::precomputed::GpuPrecomputed;
 use super::quantize_tensor::polar_dequantize;
 use super::storage::{LayerStorage, QuantizedKV, StorageMetadata};
+use super::{ensure_gpu_precomputed, PrecomputedState};
 
 /// Minimum growth increment when expanding QJL sign/norm buffers.
 const MIN_QJL_GROW: usize = 128;
@@ -36,7 +34,7 @@ struct TqLayer {
 pub struct TqCache {
     config: CacheConfig,
     metadata: StorageMetadata,
-    precomputed: OnceLock<GpuPrecomputed>,
+    precomputed: PrecomputedState,
     layers: Vec<Mutex<TqLayer>>,
 }
 
@@ -52,7 +50,7 @@ impl TqCache {
         Ok(Self {
             config,
             metadata,
-            precomputed: OnceLock::new(),
+            precomputed: PrecomputedState::default(),
             layers,
         })
     }
@@ -269,6 +267,17 @@ impl TqCache {
         let qc = make_quant_config(pre, &self.config);
         dequantize_full_impl(&layer_slot.storage, &self.metadata, &qc, orig_dtype)
     }
+
+    /// Borrow-check `layer` and return the per-layer mutex. Returns a
+    /// `candle_core::Error` instead of panicking when `layer >= num_layers`.
+    fn layer_mutex(&self, layer: usize) -> Result<&Mutex<TqLayer>> {
+        self.layers.get(layer).ok_or_else(|| {
+            cache_err(format!(
+                "layer index {layer} out of range (cache has {} layers)",
+                self.layers.len()
+            ))
+        })
+    }
 }
 
 impl CompressedKVCache for TqCache {
@@ -276,7 +285,7 @@ impl CompressedKVCache for TqCache {
     fn prefill(&self, layer: usize, k: &Tensor, v: &Tensor, q: &Tensor) -> Result<DequantResult> {
         let orig_dtype = k.dtype();
         let pre = ensure_gpu_precomputed(&self.precomputed, &self.config, k.device())?;
-        let mut guard = self.layers[layer].lock();
+        let mut guard = self.layer_mutex(layer)?.lock();
         let (old_seq_len, _total) = self.quantize_and_store(&mut guard, k, v, pre)?;
 
         let (full_k, full_v) = if old_seq_len == 0 {
@@ -303,7 +312,7 @@ impl CompressedKVCache for TqCache {
     ) -> Result<DecodeOutput> {
         let orig_dtype = k.dtype();
         let pre = ensure_gpu_precomputed(&self.precomputed, &self.config, k.device())?;
-        let mut guard = self.layers[layer].lock();
+        let mut guard = self.layer_mutex(layer)?.lock();
         self.quantize_and_store(&mut guard, k, v, pre)?;
 
         // TQ always uses dequant path (no fused kernel with inline QJL yet)
@@ -317,8 +326,14 @@ impl CompressedKVCache for TqCache {
         }))
     }
 
+    /// Returns 0 for out-of-range `layer` rather than panicking — the trait
+    /// signature is infallible so callers cannot distinguish "not yet
+    /// populated" from "invalid index" anyway.
     fn seq_len(&self, layer: usize) -> usize {
-        self.layers[layer].lock().storage.seq_len()
+        self.layers
+            .get(layer)
+            .map(|m| m.lock().storage.seq_len())
+            .unwrap_or(0)
     }
 
     fn reset(&self) -> Result<()> {

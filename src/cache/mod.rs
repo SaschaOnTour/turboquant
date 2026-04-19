@@ -23,6 +23,23 @@ mod wht_tensor;
 use std::sync::OnceLock;
 
 use candle_core::{Device, Result};
+use parking_lot::Mutex;
+
+/// Lazy-initialization state for the shared [`GpuPrecomputed`] tensors.
+///
+/// Bundles the `OnceLock` (holding the initialized value) with a small
+/// init mutex (serializing the slow path to avoid duplicate GPU
+/// allocations). `PqoCache` and `TqCache` each own one of these.
+///
+/// Internal type exposed via `#[doc(hidden)] pub` so integration tests
+/// can construct one for helpers like [`ensure_gpu_precomputed`]. Not
+/// part of the public API.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct PrecomputedState {
+    pub(crate) cell: OnceLock<GpuPrecomputed>,
+    pub(crate) init_mutex: Mutex<()>,
+}
 
 pub use config::{CacheConfig, QuantNormMode, QUANT_BLOCK_SIZE};
 pub use pqo::PqoCache;
@@ -35,9 +52,15 @@ pub(crate) fn cache_err(msg: impl std::fmt::Display) -> candle_core::Error {
     candle_core::Error::Msg(format!("TurboQuant cache: {msg}"))
 }
 
-/// Lazy-initialize the shared `GpuPrecomputed` for a cache. Thread-safe:
-/// concurrent callers may race, but only one result is stored (the loser's
-/// result is dropped — deterministic so both are equivalent).
+/// Lazy-initialize the shared `GpuPrecomputed` for a cache.
+///
+/// Thread-safe via double-checked locking: the `init_mutex` serializes the
+/// slow path so `GpuPrecomputed::new` runs at most once per cache instance,
+/// even under contention. Subsequent callers take the fast path (a single
+/// `OnceLock::get`) without touching the mutex.
+///
+/// The stable-Rust alternative `OnceLock::get_or_try_init` is still
+/// nightly-only as of 1.95 (feature `once_cell_try`).
 ///
 /// Internal helper. The `#[doc(hidden)] pub` visibility is a Rust convention
 /// for items that are reachable from integration tests but not part of the
@@ -49,19 +72,23 @@ pub(crate) fn cache_err(msg: impl std::fmt::Display) -> candle_core::Error {
 // TQ_UNTESTED heuristic does not detect cross-crate integration tests even
 // when the test name matches the function name exactly.
 pub fn ensure_gpu_precomputed<'a>(
-    cell: &'a OnceLock<GpuPrecomputed>,
+    state: &'a PrecomputedState,
     config: &CacheConfig,
     device: &Device,
 ) -> Result<&'a GpuPrecomputed> {
-    if let Some(p) = cell.get() {
+    if let Some(p) = state.cell.get() {
+        return Ok(p);
+    }
+    // Slow path: serialize initialization to avoid wasted GPU allocations
+    // when multiple threads race on the first prefill/decode call.
+    let _init_guard = state.init_mutex.lock();
+    if let Some(p) = state.cell.get() {
         return Ok(p);
     }
     let fresh = GpuPrecomputed::new(config, device)?;
-    let _ = cell.set(fresh);
-    match cell.get() {
-        Some(p) => Ok(p),
-        None => Err(cache_err(
-            "precomputed cell unset after init — concurrent modification",
-        )),
-    }
+    let _ = state.cell.set(fresh);
+    state
+        .cell
+        .get()
+        .ok_or_else(|| cache_err("precomputed cell unset after init — concurrent modification"))
 }
