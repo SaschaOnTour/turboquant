@@ -67,7 +67,11 @@ jobs:
         run: cargo install rustqual
 
       - name: Quality analysis
-        run: rustqual src/ --fail-on-warnings
+        # Scan the whole repository (src/, tests/, benches/, examples/) —
+        # scanning only src/ produces false-positive TQ_UNTESTED and
+        # DEAD_CODE/testonly findings because rustqual can't see the
+        # integration-test callers under tests/.
+        run: rustqual . --fail-on-warnings
 
       - name: Publish
         run: cargo publish
