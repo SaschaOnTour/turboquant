@@ -59,8 +59,8 @@ pub(crate) fn cache_err(msg: impl std::fmt::Display) -> candle_core::Error {
 /// even under contention. Subsequent callers take the fast path (a single
 /// `OnceLock::get`) without touching the mutex.
 ///
-/// The stable-Rust alternative `OnceLock::get_or_try_init` is still
-/// nightly-only as of 1.95 (feature `once_cell_try`).
+/// The stable-Rust alternative `OnceLock::get_or_try_init` is not available
+/// on this crate's MSRV (feature `once_cell_try`).
 ///
 /// Internal helper. The `#[doc(hidden)] pub` visibility is a Rust convention
 /// for items that are reachable from integration tests but not part of the
