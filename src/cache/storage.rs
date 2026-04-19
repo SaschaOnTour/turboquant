@@ -68,26 +68,22 @@ pub struct LayerStorage {
 
 impl LayerStorage {
     /// Current sequence length.
-    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn seq_len(&self) -> usize {
         self.buf_seq_len
     }
 
     /// Whether the GPU path is active (has data stored).
-    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn is_active(&self) -> bool {
         self.gpu_path_active && self.buf_seq_len > 0
     }
 
     /// Allocated capacity (max seq_len before realloc).
-    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn capacity(&self) -> usize {
         self.gpu_k_indices.as_ref().map_or(0, |t| t.dims()[1])
     }
 
     /// Borrow the four GPU tensors as a group. Returns `None` if any buffer
     /// is not yet allocated (i.e. `ensure_capacity` has not been called).
-    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn buffers(&self) -> Option<LayerBuffers<'_>> {
         match (
             self.gpu_k_indices.as_ref(),
@@ -107,7 +103,6 @@ impl LayerStorage {
 
     /// Ensure buffers have capacity for at least `needed` tokens.
     /// Grows by 25% + 128 tokens headroom (not doubling — saves VRAM).
-    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn ensure_capacity(
         &mut self,
         needed: usize,
@@ -147,7 +142,6 @@ impl LayerStorage {
     }
 
     /// Append new quantized data at the given offset.
-    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn append(
         &mut self,
         offset: usize,
@@ -180,16 +174,9 @@ impl LayerStorage {
         Ok(())
     }
 
-    /// Reset this layer to empty state.
-    // qual:allow(TQ-003) — tested via cache_storage_tests
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-
     /// Verify all internal invariants. Returns an error if the storage is
     /// in an inconsistent state (e.g. active flag disagrees with the buffer
     /// allocation).
-    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn validate(&self) -> Result<()> {
         if self.gpu_path_active && self.buf_seq_len == 0 {
             return Err(cache_err(
@@ -208,7 +195,6 @@ impl LayerStorage {
     }
 
     /// Estimated persistent memory usage in bytes for this layer.
-    // qual:allow(TQ-003) — tested via cache_storage_tests
     pub fn memory_usage(&self, metadata: &StorageMetadata) -> usize {
         let seq = self.buf_seq_len;
         if seq == 0 {

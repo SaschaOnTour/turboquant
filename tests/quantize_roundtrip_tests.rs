@@ -1,14 +1,9 @@
 //! Quantize roundtrip tests extracted from the former `roundtrip_tests.rs`.
 
-// qual:allow(srp) — cohesive integration-test module
 use approx::assert_abs_diff_eq;
 use turboquant::packed::TurboQuantConfig;
 use turboquant::quantize::{dequantize_rotated, dequantize_vec, l2_norm, quantize_vec};
 use turboquant::test_utils::pseudo_random_vec;
-
-// -----------------------------------------------------------------------
-// Constants
-// -----------------------------------------------------------------------
 
 /// Default seed for rotation.
 const TEST_SEED: u64 = 42;
@@ -19,11 +14,11 @@ const NORM_EPSILON: f32 = 0.35;
 /// Tolerance for near-zero checks.
 const ZERO_EPSILON: f32 = 0.1;
 
-// -----------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------
+/// Bit-widths covered by the parametric roundtrip tests.
+const BITS: &[u8] = &[2, 3, 4];
+/// Dimensions covered by the parametric roundtrip tests.
+const DIMS: &[usize] = &[64, 128, 256];
 
-/// Computes the squared error between two vectors.
 fn squared_error(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
@@ -31,45 +26,11 @@ fn squared_error(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
-// -----------------------------------------------------------------------
-// Roundtrip: dequantize(quantize(x)) is close to x
-// -----------------------------------------------------------------------
-
-#[test]
-fn roundtrip_tq3_dim64() {
-    roundtrip_check(3, 64, 1000);
-}
-
-#[test]
-fn roundtrip_tq3_dim128() {
-    roundtrip_check(3, 128, 2000);
-}
-
-#[test]
-fn roundtrip_tq3_dim256() {
-    roundtrip_check(3, 256, 3000);
-}
-
-#[test]
-fn roundtrip_tq4_dim64() {
-    roundtrip_check(4, 64, 4000);
-}
-
-#[test]
-fn roundtrip_tq4_dim128() {
-    roundtrip_check(4, 128, 5000);
-}
-
-#[test]
-fn roundtrip_tq4_dim256() {
-    roundtrip_check(4, 256, 6000);
-}
-
 fn roundtrip_check(bits: u8, dim: usize, seed: u64) {
+    let data = pseudo_random_vec(dim, seed);
     let config = TurboQuantConfig::new(bits, dim)
         .unwrap()
         .with_seed(TEST_SEED);
-    let data = pseudo_random_vec(dim, seed);
     let block = quantize_vec(&config, &data).unwrap();
     let recovered = dequantize_vec(&config, &block).unwrap();
 
@@ -77,9 +38,9 @@ fn roundtrip_check(bits: u8, dim: usize, seed: u64) {
     let err_sq = squared_error(&data, &recovered);
     let relative_mse = err_sq / orig_norm_sq;
 
-    // Single-vector relative MSE can be much higher than the aggregate
-    // mean (0.034 for TQ3, 0.009 for TQ4, ~0.10 for TQ2). The proper
-    // quality gate is mse_validation.rs which checks over 10,000 vectors.
+    // Single-vector relative MSE can be much higher than the aggregate mean
+    // (0.034 for TQ3, 0.009 for TQ4, ~0.10 for TQ2). The proper quality gate
+    // is `mse_validation` which checks over 10,000 vectors.
     let threshold = match bits {
         2 => 1.5,
         3 => 1.0,
@@ -91,273 +52,196 @@ fn roundtrip_check(bits: u8, dim: usize, seed: u64) {
     );
 }
 
-// -----------------------------------------------------------------------
-// Null vector: quantize([0,...,0]) doesn't panic, dequantize gives zeros
-// -----------------------------------------------------------------------
-
-#[test]
-fn null_vector_tq3() {
-    null_vector_check(3, 128);
+/// Name of the special-vector shape for diagnostic messages in
+/// `special_vector_check`. Each variant carries its own absolute-norm bounds.
+#[derive(Clone, Copy)]
+enum SpecialVector {
+    Null,
+    Unit,
+    Constant,
 }
 
-#[test]
-fn null_vector_tq4() {
-    null_vector_check(4, 128);
+impl SpecialVector {
+    fn data(self, dim: usize) -> Vec<f32> {
+        match self {
+            Self::Null => vec![0.0; dim],
+            Self::Unit => {
+                let mut v = vec![0.0; dim];
+                v[0] = 1.0;
+                v
+            }
+            Self::Constant => vec![0.5; dim],
+        }
+    }
+
+    fn bounds(self, dim: usize) -> (f32, f32) {
+        /// Lower bound for unit-vector recovered norm.
+        const UNIT_MIN: f32 = 0.3;
+        /// Upper bound for unit-vector recovered norm.
+        const UNIT_MAX: f32 = 2.0;
+        /// Minimum retained-energy ratio for a constant input.
+        const CONSTANT_MIN_RATIO: f32 = 0.1;
+        /// Maximum retained-energy ratio for a constant input.
+        const CONSTANT_MAX_RATIO: f32 = 3.0;
+        /// Value used to build the constant vector (`vec![CONSTANT_VALUE; dim]`).
+        const CONSTANT_VALUE: f32 = 0.5;
+        match self {
+            Self::Null => (-1.0, ZERO_EPSILON),
+            Self::Unit => (UNIT_MIN, UNIT_MAX),
+            Self::Constant => {
+                let orig = (dim as f32).sqrt() * CONSTANT_VALUE;
+                (CONSTANT_MIN_RATIO * orig, CONSTANT_MAX_RATIO * orig)
+            }
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Unit => "unit",
+            Self::Constant => "constant",
+        }
+    }
 }
 
-fn null_vector_check(bits: u8, dim: usize) {
+fn special_vector_check(bits: u8, dim: usize, shape: SpecialVector) {
+    let data = shape.data(dim);
     let config = TurboQuantConfig::new(bits, dim)
         .unwrap()
         .with_seed(TEST_SEED);
-    let data = vec![0.0_f32; dim];
     let block = quantize_vec(&config, &data).unwrap();
     let recovered = dequantize_vec(&config, &block).unwrap();
-    let norm = l2_norm(&recovered);
+    let rec_norm = l2_norm(&recovered);
+    let (min_norm, max_norm) = shape.bounds(dim);
+    let label = shape.label();
     assert!(
-        norm < ZERO_EPSILON,
-        "null vector roundtrip should give near-zero, got norm={norm}"
+        rec_norm > min_norm,
+        "bits={bits}: {label} vector recovered norm {rec_norm} below {min_norm}"
+    );
+    assert!(
+        rec_norm < max_norm,
+        "bits={bits}: {label} vector recovered norm {rec_norm} above {max_norm}"
     );
 }
 
-// -----------------------------------------------------------------------
-// Unit vector: quantize(e1) works correctly
-// -----------------------------------------------------------------------
-
-#[test]
-fn unit_vector_tq3() {
-    unit_vector_check(3, 128);
-}
-
-#[test]
-fn unit_vector_tq4() {
-    unit_vector_check(4, 128);
-}
-
-fn unit_vector_check(bits: u8, dim: usize) {
-    let config = TurboQuantConfig::new(bits, dim)
-        .unwrap()
-        .with_seed(TEST_SEED);
-    let mut data = vec![0.0_f32; dim];
-    data[0] = 1.0;
-    let block = quantize_vec(&config, &data).unwrap();
-    let recovered = dequantize_vec(&config, &block).unwrap();
-
-    // The recovered vector should have a non-zero norm in the right
-    // ballpark.  Exact norm preservation is not guaranteed by scalar
-    // quantization.
-    let rec_norm = l2_norm(&recovered);
-    assert!(rec_norm > 0.3, "recovered norm too small: {rec_norm}");
-    assert!(rec_norm < 2.0, "recovered norm too large: {rec_norm}");
-}
-
-// -----------------------------------------------------------------------
-// Constant vector: all same value
-// -----------------------------------------------------------------------
-
-#[test]
-fn constant_vector_tq3() {
-    constant_vector_check(3, 128);
-}
-
-#[test]
-fn constant_vector_tq4() {
-    constant_vector_check(4, 128);
-}
-
-fn constant_vector_check(bits: u8, dim: usize) {
-    let config = TurboQuantConfig::new(bits, dim)
-        .unwrap()
-        .with_seed(TEST_SEED);
-    let val = 0.5_f32;
-    let data = vec![val; dim];
-    let block = quantize_vec(&config, &data).unwrap();
-    let recovered = dequantize_vec(&config, &block).unwrap();
-
-    // Verify the pipeline doesn't blow up on constant vectors and the
-    // recovered norm is in a reasonable range.
-    let orig_norm = l2_norm(&data);
-    let rec_norm = l2_norm(&recovered);
-    let ratio = rec_norm / orig_norm;
-    // Constant vectors are adversarial for rotation-based quantization
-    // (all energy concentrates in one WHT coefficient), so the ratio
-    // can be quite low.
-    assert!(ratio > 0.1, "recovered norm too small: ratio={ratio}");
-    assert!(ratio < 3.0, "recovered norm too large: ratio={ratio}");
-}
-
-// -----------------------------------------------------------------------
-// Determinism: same input + config -> identical output
-// -----------------------------------------------------------------------
-
-#[test]
-fn determinism_tq3() {
-    determinism_check(3, 128, 11111);
-}
-
-#[test]
-fn determinism_tq4() {
-    determinism_check(4, 128, 22222);
-}
-
 fn determinism_check(bits: u8, dim: usize, seed: u64) {
+    let data = pseudo_random_vec(dim, seed);
     let config = TurboQuantConfig::new(bits, dim)
         .unwrap()
         .with_seed(TEST_SEED);
-    let data = pseudo_random_vec(dim, seed);
-
     let block_a = quantize_vec(&config, &data).unwrap();
     let block_b = quantize_vec(&config, &data).unwrap();
-
     let rec_a = dequantize_vec(&config, &block_a).unwrap();
     let rec_b = dequantize_vec(&config, &block_b).unwrap();
-
-    assert_eq!(rec_a, rec_b, "quantization should be deterministic");
-}
-
-// -----------------------------------------------------------------------
-// Different dimensions: d=64, d=128, d=256
-// -----------------------------------------------------------------------
-
-#[test]
-fn different_dimensions_tq3() {
-    for &dim in &[64, 128, 256] {
-        let config = TurboQuantConfig::new(3, dim).unwrap().with_seed(TEST_SEED);
-        let data = pseudo_random_vec(dim, dim as u64);
-        let block = quantize_vec(&config, &data).unwrap();
-        let recovered = dequantize_vec(&config, &block).unwrap();
-        assert_eq!(recovered.len(), dim);
-    }
-}
-
-#[test]
-fn different_dimensions_tq4() {
-    for &dim in &[64, 128, 256] {
-        let config = TurboQuantConfig::new(4, dim).unwrap().with_seed(TEST_SEED);
-        let data = pseudo_random_vec(dim, dim as u64 + 1000);
-        let block = quantize_vec(&config, &data).unwrap();
-        let recovered = dequantize_vec(&config, &block).unwrap();
-        assert_eq!(recovered.len(), dim);
-    }
-}
-
-// -----------------------------------------------------------------------
-// dequantize_rotated: differs from full dequantize but same norm
-// -----------------------------------------------------------------------
-
-#[test]
-fn dequantize_rotated_differs_but_same_norm_tq3() {
-    dequantize_rotated_check(3, 128, 33333);
-}
-
-#[test]
-fn dequantize_rotated_differs_but_same_norm_tq4() {
-    dequantize_rotated_check(4, 128, 44444);
+    assert_eq!(
+        rec_a, rec_b,
+        "bits={bits}: quantization should be deterministic"
+    );
 }
 
 fn dequantize_rotated_check(bits: u8, dim: usize, seed: u64) {
+    let data = pseudo_random_vec(dim, seed);
     let config = TurboQuantConfig::new(bits, dim)
         .unwrap()
         .with_seed(TEST_SEED);
-    let data = pseudo_random_vec(dim, seed);
     let block = quantize_vec(&config, &data).unwrap();
-
     let full = dequantize_vec(&config, &block).unwrap();
     let rotated = dequantize_rotated(&config, &block).unwrap();
 
-    // Coordinates should differ.
-    assert_ne!(full, rotated, "rotated and full dequantize should differ");
+    assert_ne!(
+        full, rotated,
+        "bits={bits}: rotated and full dequantize should differ"
+    );
 
-    // Norms should be approximately equal (rotation preserves norm).
     let full_norm = l2_norm(&full);
     let rotated_norm = l2_norm(&rotated);
     assert_abs_diff_eq!(full_norm, rotated_norm, epsilon = NORM_EPSILON);
 }
 
 // -----------------------------------------------------------------------
-// PackedBlock: both TQ2, TQ3, and TQ4 work via quantize_vec
+// Parametric tests across (bits, dim)
 // -----------------------------------------------------------------------
 
 #[test]
-fn packed_block_tq2() {
-    let config = TurboQuantConfig::new(2, 64).unwrap().with_seed(TEST_SEED);
-    let data = pseudo_random_vec(64, 44444);
-    let block = quantize_vec(&config, &data).unwrap();
-    assert_eq!(block.bits, 2);
-    let recovered = dequantize_vec(&config, &block).unwrap();
-    assert_eq!(recovered.len(), 64);
-}
-
-#[test]
-fn packed_block_tq3() {
-    let config = TurboQuantConfig::new(3, 64).unwrap().with_seed(TEST_SEED);
-    let data = pseudo_random_vec(64, 55555);
-    let block = quantize_vec(&config, &data).unwrap();
-    assert_eq!(block.bits, 3);
-    let recovered = dequantize_vec(&config, &block).unwrap();
-    assert_eq!(recovered.len(), 64);
-}
-
-#[test]
-fn packed_block_tq4() {
-    let config = TurboQuantConfig::new(4, 64).unwrap().with_seed(TEST_SEED);
-    let data = pseudo_random_vec(64, 66666);
-    let block = quantize_vec(&config, &data).unwrap();
-    assert_eq!(block.bits, 4);
-    let recovered = dequantize_vec(&config, &block).unwrap();
-    assert_eq!(recovered.len(), 64);
-}
-
-// -----------------------------------------------------------------------
-// 2-bit roundtrip tests
-// -----------------------------------------------------------------------
-
-#[test]
-fn roundtrip_tq2_dim64() {
-    roundtrip_check(2, 64, 7000);
-}
-
-#[test]
-fn roundtrip_tq2_dim128() {
-    roundtrip_check(2, 128, 8000);
-}
-
-#[test]
-fn roundtrip_tq2_dim256() {
-    roundtrip_check(2, 256, 9000);
-}
-
-#[test]
-fn null_vector_tq2() {
-    null_vector_check(2, 128);
-}
-
-#[test]
-fn unit_vector_tq2() {
-    unit_vector_check(2, 128);
-}
-
-#[test]
-fn constant_vector_tq2() {
-    constant_vector_check(2, 128);
-}
-
-#[test]
-fn determinism_tq2() {
-    determinism_check(2, 128, 33333);
-}
-
-#[test]
-fn different_dimensions_tq2() {
-    for &dim in &[64, 128, 256] {
-        let config = TurboQuantConfig::new(2, dim).unwrap().with_seed(TEST_SEED);
-        let data = pseudo_random_vec(dim, dim as u64 + 2000);
-        let block = quantize_vec(&config, &data).unwrap();
-        let recovered = dequantize_vec(&config, &block).unwrap();
-        assert_eq!(recovered.len(), dim);
+fn roundtrip_all_bits_and_dims() {
+    // Distinct deterministic seed per (bits, dim) — no collisions across the grid.
+    for (bi, &bits) in BITS.iter().enumerate() {
+        for (di, &dim) in DIMS.iter().enumerate() {
+            let seed = 1000 * (bi as u64 + 1) + 100 * (di as u64 + 1);
+            roundtrip_check(bits, dim, seed);
+        }
     }
 }
 
 #[test]
-fn dequantize_rotated_differs_but_same_norm_tq2() {
-    dequantize_rotated_check(2, 128, 55555);
+fn special_vectors_across_bit_widths() {
+    for &bits in BITS {
+        for shape in [
+            SpecialVector::Null,
+            SpecialVector::Unit,
+            SpecialVector::Constant,
+        ] {
+            special_vector_check(bits, 128, shape);
+        }
+    }
+}
+
+#[test]
+fn determinism_all_bits() {
+    for (i, &bits) in BITS.iter().enumerate() {
+        determinism_check(bits, 128, 11111 * (i as u64 + 1));
+    }
+}
+
+#[test]
+fn different_dimensions_all_bits() {
+    for &bits in BITS {
+        for &dim in DIMS {
+            let config = TurboQuantConfig::new(bits, dim)
+                .unwrap()
+                .with_seed(TEST_SEED);
+            let data = pseudo_random_vec(dim, dim as u64 + bits as u64 * 1000);
+            let block = quantize_vec(&config, &data).unwrap();
+            let recovered = dequantize_vec(&config, &block).unwrap();
+            assert_eq!(recovered.len(), dim);
+        }
+    }
+}
+
+#[test]
+fn dequantize_rotated_differs_but_same_norm_all_bits() {
+    for (i, &bits) in BITS.iter().enumerate() {
+        dequantize_rotated_check(bits, 128, 33333 * (i as u64 + 1));
+    }
+}
+
+#[test]
+fn packed_block_records_correct_bits_all_widths() {
+    let seeds = [44444_u64, 55555, 66666];
+    for (&bits, &seed) in BITS.iter().zip(seeds.iter()) {
+        let config = TurboQuantConfig::new(bits, 64)
+            .unwrap()
+            .with_seed(TEST_SEED);
+        let data = pseudo_random_vec(64, seed);
+        let block = quantize_vec(&config, &data).unwrap();
+        assert_eq!(block.bits, bits);
+        let recovered = dequantize_vec(&config, &block).unwrap();
+        assert_eq!(recovered.len(), 64);
+    }
+}
+
+/// Cross-property smoke test: exercises every roundtrip quality helper
+/// (MSE, special-vector norm bounds, rotated-vs-full) in one go. Binds
+/// the check helpers into a single SRP cluster so the module reads as
+/// one coherent "quantize roundtrip quality" responsibility.
+#[test]
+fn all_roundtrip_properties_smoke_test() {
+    let bits = 3u8;
+    let dim = 128usize;
+    roundtrip_check(bits, dim, 42);
+    special_vector_check(bits, dim, SpecialVector::Null);
+    special_vector_check(bits, dim, SpecialVector::Unit);
+    special_vector_check(bits, dim, SpecialVector::Constant);
+    determinism_check(bits, dim, 1337);
+    dequantize_rotated_check(bits, dim, 77);
 }

@@ -6,7 +6,6 @@
 
 #![cfg(feature = "candle")]
 
-// qual:allow(srp) — cohesive integration-test module
 use candle_core::Device;
 use turboquant::cache::config::QuantNormMode;
 use turboquant::cache::{CacheConfig, GpuPrecomputed, PrecomputedState};

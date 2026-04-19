@@ -31,6 +31,7 @@ ignore_functions = [
     "compute_*",
     "measure_compression_ratio",
     "random_unit_vec",
+    "random_normal_vec",
     "run_large_cache_e2e",
     "attend_config",
     "mse_distortion",

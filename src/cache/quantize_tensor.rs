@@ -184,13 +184,12 @@ pub fn polar_dequantize(
     let n = indices.dims()[0];
     let head_dim = config.head_dim;
     let bits = config.bits;
-    let outlier_blocks = config.outlier_blocks;
     let pre = config.pre;
     let num_blocks = config.num_blocks();
 
     // CUDA fast path: fused unpack + codebook + WHT + scale kernel
     #[cfg(feature = "cuda")]
-    if indices.device().is_cuda() && outlier_blocks >= num_blocks {
+    if indices.device().is_cuda() && config.outlier_blocks >= num_blocks {
         return super::cuda::quantize::cuda_dequantize_fast(indices, scales, n, config);
     }
 

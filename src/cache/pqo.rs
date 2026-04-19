@@ -3,16 +3,15 @@
 //! All blocks use the outlier (higher-bit) codebook — the recommended mode
 //! for production use. Implements [`CompressedKVCache`] from `mistralrs-kv-cache`.
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Result, Tensor};
 use mistralrs_kv_cache::{AttendConfig, CompressedKVCache, DecodeOutput, DequantResult};
 use parking_lot::Mutex;
 
-use super::cache_err;
 use super::common::{
     dequant_result, dequantize_full_impl, flatten_kv, make_quant_config, quantize_kv_pair,
     validate_and_make_metadata,
 };
-use super::config::{CacheConfig, QUANT_BLOCK_SIZE};
+use super::config::CacheConfig;
 use super::precomputed::GpuPrecomputed;
 use super::storage::{LayerStorage, QuantizedKV, StorageMetadata};
 use super::{ensure_gpu_precomputed, PrecomputedState};
@@ -217,9 +216,9 @@ impl CompressedKVCache for PqoCache {
     }
 
     fn reset(&self) -> Result<()> {
-        for m in &self.layers {
-            m.lock().reset();
-        }
+        self.layers
+            .iter()
+            .for_each(|m| *m.lock() = LayerStorage::default());
         Ok(())
     }
 
