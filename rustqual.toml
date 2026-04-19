@@ -37,6 +37,8 @@ ignore_functions = [
     "mse_distortion",
     "assert_codebook_valid",
     "assert_symmetric",
+    "assert_in_range",
+    "cuda_device",
     "drive_decode",
     "create_tq*_cache",
     "bench_*",
