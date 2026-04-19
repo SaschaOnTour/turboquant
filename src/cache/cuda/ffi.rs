@@ -1,10 +1,20 @@
 //! FFI declarations for TurboQuant CUDA kernels.
 
 #[cfg(feature = "cuda")]
-use std::ffi::c_int;
+use std::ffi::{c_char, c_int};
 
 #[cfg(feature = "cuda")]
 type CUstream = *const std::ffi::c_void;
+
+// CUDA runtime bindings needed for post-launch error checking.
+// `cudaGetLastError` reads *and clears* the last CUDA error in the
+// current host thread; `cudaGetErrorString` turns the error code into
+// a human-readable message.
+#[cfg(feature = "cuda")]
+extern "C" {
+    pub fn cudaGetLastError() -> c_int;
+    pub fn cudaGetErrorString(err: c_int) -> *const c_char;
+}
 
 #[cfg(feature = "cuda")]
 extern "C" {

@@ -7,8 +7,9 @@ fn main() {
         println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_dequant_kernel.cu");
         println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_quant_kernel.cu");
         println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_attention_kernel.cu");
+        println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_test_helpers.cu");
 
-        let builder = cudaforge::KernelBuilder::new()
+        let mut builder = cudaforge::KernelBuilder::new()
             .source_glob("src/cache/cuda/kernels/*.cu")
             .arg("-std=c++17")
             .arg("-O3")
@@ -21,6 +22,12 @@ fn main() {
             .arg("--use_fast_math")
             .arg("--compiler-options")
             .arg("-fPIC");
+
+        // Exclude test-only kernels from production builds; opt in via the
+        // `cuda-test-support` feature for integration tests.
+        if std::env::var_os("CARGO_FEATURE_CUDA_TEST_SUPPORT").is_none() {
+            builder = builder.exclude(&["tq_test_helpers.cu"]);
+        }
 
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let target = std::env::var("TARGET").unwrap();
