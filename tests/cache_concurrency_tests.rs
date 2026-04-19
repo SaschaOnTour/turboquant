@@ -144,7 +144,7 @@ fn concurrent_reset_decode() {
         for _ in 0..ITERS {
             let (k, v) = make_kv(1, SEED_A)?;
             let q = make_q(1)?;
-            let _ = cache_a.decode(0, &k, &v, &q, &decode_config());
+            cache_a.decode(0, &k, &v, &q, &decode_config())?;
             cache_a.reset()?;
         }
         Ok(())

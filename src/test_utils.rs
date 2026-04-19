@@ -2,7 +2,9 @@
 //!
 //! This module is `#[doc(hidden)] pub` so that integration tests, benches,
 //! and examples in the same crate can import helpers without each
-//! redefining them. It is NOT part of the public API.
+//! redefining them. `#[doc(hidden)]` keeps it out of rustdoc, but the
+//! module is still publicly reachable and therefore part of the crate's
+//! SemVer surface — treat breaking changes here accordingly.
 
 #[cfg(feature = "candle")]
 use candle_core::{Device, Tensor};

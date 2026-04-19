@@ -15,8 +15,10 @@ pub mod rotation;
 #[cfg(feature = "candle")]
 pub mod cache;
 
-/// Test helpers exposed via `#[doc(hidden)] pub mod` — reachable from
-/// integration tests and benches but not part of the public API.
+/// Test helpers shared by integration tests and benches. Declared `pub mod`
+/// so cross-file test code can import them, and `#[doc(hidden)]` to keep
+/// them out of rustdoc — but note that this module *is* part of the crate's
+/// public API surface for SemVer purposes.
 #[doc(hidden)]
 pub mod test_utils;
 

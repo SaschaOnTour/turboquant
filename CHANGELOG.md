@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     layers independent.
 - **`LayerStorage::validate()`** — cross-field invariant check, called
   from `append` via `debug_assert!` to catch state inconsistencies.
-- **`docs/rustqual-bugs.md`** — upstream bug reports for three rustqual
+- **Upstream rustqual bug reports** — filed for three rustqual
   false-positives encountered during the refactor.
 
 ### Fixed
