@@ -92,7 +92,7 @@ impl TqCache {
     }
 
     /// Quantize + store + compute QJL signs/norms for new tokens. Caller holds the lock.
-    // qual:allow(iosp) — orchestrator that coordinates six steps: ensure capacity, flatten, quantize, reshape, append, compute QJL; splitting introduces param-passing overhead (see docs/rustqual-bugs.md)
+    // qual:allow(iosp) — orchestrator coordinating six steps: ensure capacity, flatten, quantize, reshape, append, compute QJL; splitting introduces param-passing overhead.
     fn quantize_and_store(
         &self,
         layer_slot: &mut TqLayer,
@@ -281,7 +281,7 @@ impl TqCache {
 }
 
 impl CompressedKVCache for TqCache {
-    // qual:allow(iosp) — trait entry point orchestrating precomputed init, lock acquisition, quantize-and-store, dequantize, and logit-bias computation (see docs/rustqual-bugs.md)
+    // qual:allow(iosp) — trait entry point orchestrating precomputed init, lock acquisition, quantize-and-store, dequantize, and logit-bias computation.
     fn prefill(&self, layer: usize, k: &Tensor, v: &Tensor, q: &Tensor) -> Result<DequantResult> {
         let orig_dtype = k.dtype();
         let pre = ensure_gpu_precomputed(&self.precomputed, &self.config, k.device())?;

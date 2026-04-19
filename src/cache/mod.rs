@@ -66,7 +66,7 @@ pub(crate) fn cache_err(msg: impl std::fmt::Display) -> candle_core::Error {
 /// for items that are reachable from integration tests but not part of the
 /// public API — no SemVer guarantees.
 #[doc(hidden)]
-// qual:allow(TQ-003) — rustqual false-positive (see docs/rustqual-bugs.md).
+// qual:allow(TQ-003) — rustqual false-positive; rationale below.
 // Directly tested by `tests/cache_internals_tests.rs::ensure_gpu_precomputed`
 // and `ensure_gpu_precomputed_returns_initialized_cell`, but rustqual's
 // TQ_UNTESTED heuristic does not detect cross-crate integration tests even

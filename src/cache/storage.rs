@@ -54,8 +54,9 @@ pub struct LayerBuffers<'a> {
 /// All per-layer fields are grouped here so an outer cache can wrap one lock
 /// per layer (`Mutex<LayerStorage>`) to allow parallel access across layers.
 // qual:allow(srp) — cohesive per-layer GPU storage: readers and mutators
-// operate on the same (buf_seq_len, gpu_*, gpu_path_active) state; see
-// docs/rustqual-bugs.md for the LCOM4=2 false-positive report.
+// operate on the same (buf_seq_len, gpu_*, gpu_path_active) state. The
+// reported LCOM4=2 is a false positive — these fields form one storage
+// lifecycle (allocation, growth, reads, GPU-path tracking).
 #[derive(Default)]
 pub struct LayerStorage {
     pub(crate) buf_seq_len: usize,

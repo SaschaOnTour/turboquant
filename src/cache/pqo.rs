@@ -33,7 +33,7 @@ pub struct PqoCache {
 }
 
 impl PqoCache {
-    /// Create a new PQO/PQ/TQ cache from configuration.
+    /// Create a new PQO/PQ cache from configuration.
     ///
     /// Returns an error if `head_dim` is not divisible by `QUANT_BLOCK_SIZE` (32).
     pub fn new(config: CacheConfig) -> candle_core::Result<Self> {

@@ -32,7 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shared test-utility module**: `turboquant::test_utils` is now
   `#[doc(hidden)] pub` so integration tests, benches, and examples can
   import the LCG helpers and `make_kv` / `pseudo_random_vec` generators
-  without each redefining them. Not part of the public API.
+  without each redefining them. The module is publicly reachable (and
+  therefore part of the SemVer surface) but hidden from rustdoc; it is
+  intended only for cross-file test/bench/example code.
 
 ### Added
 
