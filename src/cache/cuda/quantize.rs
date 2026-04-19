@@ -9,6 +9,7 @@
 use candle_core::cuda::cudarc::driver::DevicePtr;
 use candle_core::{DType, Device, Result, Storage, Tensor};
 
+use super::check_cuda_kernel_launch;
 use super::ffi;
 use crate::cache::config::{BITS_PER_BYTE, QUANT_BLOCK_SIZE};
 use crate::cache::quantize_tensor::QuantConfig;
@@ -87,6 +88,7 @@ pub fn cuda_dequantize_fast(
                 stream,
             );
         }
+        check_cuda_kernel_launch()?;
     }
 
     output.reshape((n, head_dim))
@@ -160,6 +162,7 @@ pub fn cuda_quantize_fast(
                 stream,
             );
         }
+        check_cuda_kernel_launch()?;
     }
 
     let packed_indices = packed_flat.reshape((n, packed_dim))?;

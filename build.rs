@@ -7,6 +7,7 @@ fn main() {
         println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_dequant_kernel.cu");
         println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_quant_kernel.cu");
         println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_attention_kernel.cu");
+        println!("cargo:rerun-if-changed=src/cache/cuda/kernels/tq_test_helpers.cu");
 
         let builder = cudaforge::KernelBuilder::new()
             .source_glob("src/cache/cuda/kernels/*.cu")

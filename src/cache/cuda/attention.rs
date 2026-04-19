@@ -8,6 +8,7 @@
 use candle_core::cuda::cudarc::driver::DevicePtr;
 use candle_core::{DType, Device, Result, Storage, Tensor};
 
+use super::check_cuda_kernel_launch;
 use super::ffi;
 
 const PARTITION_SIZE: usize = 512;
@@ -168,6 +169,7 @@ pub fn fused_attention(p: &FusedAttentionParams<'_>) -> Result<Tensor> {
                 stream,
             );
         }
+        check_cuda_kernel_launch()?;
     }
 
     Ok(output)
