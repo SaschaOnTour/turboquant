@@ -26,8 +26,25 @@ pub(crate) fn validate_and_make_metadata(config: &CacheConfig) -> Result<Storage
     Ok(StorageMetadata {
         num_kv_heads: config.num_kv_heads,
         head_dim: config.head_dim,
-        bits: config.bits,
+        bits: effective_storage_bits(config)?,
     })
+}
+
+/// Storage/packing bit-width for indices.
+///
+/// In TQ mode (`outlier_blocks == 0`) only the normal codebook is used, whose
+/// values fit in `bits - 1` bits, so indices can be packed tighter; otherwise
+/// at least one block uses the outlier codebook (full `bits` range) and we
+/// must keep the wider packing.
+fn effective_storage_bits(config: &CacheConfig) -> Result<u8> {
+    if config.outlier_blocks == 0 {
+        config
+            .bits
+            .checked_sub(1)
+            .ok_or_else(|| cache_err("config.bits must be at least 1 when outlier_blocks == 0"))
+    } else {
+        Ok(config.bits)
+    }
 }
 
 /// Dequantize the full compressed cache for a single layer slot.
@@ -81,13 +98,13 @@ pub(crate) fn dequantize_full_impl(
 pub(crate) fn make_quant_config<'a>(
     precomputed: &'a GpuPrecomputed,
     config: &CacheConfig,
-) -> QuantConfig<'a> {
-    QuantConfig {
+) -> Result<QuantConfig<'a>> {
+    Ok(QuantConfig {
         head_dim: config.head_dim,
-        bits: config.bits,
+        bits: effective_storage_bits(config)?,
         outlier_blocks: config.outlier_blocks,
         pre: precomputed,
-    }
+    })
 }
 
 /// Flatten K/V tensors from `[1, heads, seq, dim]` to `[heads*seq, dim]` as f32.

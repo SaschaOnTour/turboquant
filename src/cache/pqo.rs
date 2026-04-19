@@ -65,7 +65,7 @@ impl PqoCache {
         layer_slot.ensure_capacity(old_seq_len + new_seq_len, &self.metadata, &device)?;
 
         let (k_flat, v_flat) = flatten_kv(k, v, self.config.num_kv_heads, self.config.head_dim)?;
-        let qc = make_quant_config(pre, &self.config);
+        let qc = make_quant_config(pre, &self.config)?;
         let (k_idx, k_sc, v_idx, v_sc) =
             quantize_kv_pair(&k_flat, &v_flat, self.config.norm_mode, &qc)?;
 
@@ -153,7 +153,7 @@ impl PqoCache {
         pre: &GpuPrecomputed,
         orig_dtype: DType,
     ) -> Result<(Tensor, Tensor)> {
-        let qc = make_quant_config(pre, &self.config);
+        let qc = make_quant_config(pre, &self.config)?;
         dequantize_full_impl(layer_slot, &self.metadata, &qc, orig_dtype)
     }
 

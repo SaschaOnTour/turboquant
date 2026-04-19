@@ -112,7 +112,7 @@ impl TqCache {
 
         let (k_flat, v_flat) = flatten_kv(k, v, self.config.num_kv_heads, self.config.head_dim)?;
 
-        let qc = make_quant_config(pre, &self.config);
+        let qc = make_quant_config(pre, &self.config)?;
         let packed_dim = qc.packed_dim();
         let num_blocks = qc.num_blocks();
 
@@ -264,7 +264,7 @@ impl TqCache {
         pre: &GpuPrecomputed,
         orig_dtype: DType,
     ) -> Result<(Tensor, Tensor)> {
-        let qc = make_quant_config(pre, &self.config);
+        let qc = make_quant_config(pre, &self.config)?;
         dequantize_full_impl(&layer_slot.storage, &self.metadata, &qc, orig_dtype)
     }
 
