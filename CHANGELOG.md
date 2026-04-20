@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-04-20
+
+### Fixed
+
+- **CUDA kernel launch errors now surface instead of corrupting output**
+  ([#43](https://github.com/SaschaOnTour/turboquant/issues/43),
+  [#55](https://github.com/SaschaOnTour/turboquant/pull/55)). Before
+  this fix, invalid-configuration / OOM / shared-memory-exhaustion
+  launches of `tq_dequant_batch`, `tq_quant_maxnorm_batch`, and
+  `tq_fused_attention` returned silently and produced garbage attention
+  scores that looked plausible. A `check_cuda_kernel_launch()` helper
+  now calls `cudaGetLastError` after each launch and propagates a
+  candle error with the CUDA runtime's own message.
+  Identified by Copilot review (Finding S-6).
+
+### Added
+
+- **`cuda-test-support` feature flag** compiles an intentionally
+  failing `tq_test_trigger_launch_error` kernel into the CUDA library.
+  Off by default so production builds never link this code. Used by
+  `tests/cuda_error_check_tests.rs` to verify the new helper actually
+  catches launch failures instead of letting them pass silently.
+
 ## [0.4.0] - 2026-04-19
 
 ### Changed
