@@ -25,7 +25,7 @@ jobs:
       # Prebuilt binaries for tooling instead of `cargo install …` from
       # source — saves ~3 min per run. Falls back to cargo install if a
       # tool doesn't publish prebuilts.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         with:
           tool: cargo-audit,rustqual
 
